@@ -54,6 +54,7 @@ def save_json(data_file, data):
 def main(args):
     login_url = 'https://sso.hcmut.edu.vn/cas/login?service=https%3A%2F%2Fe-learning.hcmut.edu.vn%2Flogin%2Findex.php%3FauthCAS%3DCAS'
     
+    # if you want to access to a destination website, write all of URLs as a workflow to the target website
     course_links = ["https://e-learning.hcmut.edu.vn/my/courses.php", "https://e-learning.hcmut.edu.vn/course/view.php?id=108885", 
                     "https://e-learning.hcmut.edu.vn/mod/quiz/view.php?id=188779", "https://e-learning.hcmut.edu.vn/mod/quiz/report.php?id=188779&mode=overview"]
     
@@ -65,12 +66,14 @@ def main(args):
     driver = webdriver.Chrome(options=chrome_options)
     wait = WebDriverWait(driver, 20)  # wait for 20s
     
+    
+    # login to the elearning website
     login(driver, login_url, '010344', '010344')
     
     driver.get("https://e-learning.hcmut.edu.vn")
     
     for course_link in course_links:
-        navigate_link(driver, course_link)
+        navigate_link(driver, course_link) # this function will guide the driver to access each small URL to the destination website
         
     wait.until(EC.visibility_of_element_located((By.ID, 'region-main')))
     lab_name = driver.title.split(":")[0].strip()
