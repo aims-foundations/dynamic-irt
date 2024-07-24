@@ -1,3 +1,8 @@
+"""
+This module contains utility functions.
+"""
+
+
 def parse_score(name):
     return float(name.split("\n")[1][1:])
 

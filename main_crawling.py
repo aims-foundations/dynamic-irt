@@ -1,13 +1,17 @@
+"""
+This is the main process for crawling.
+"""
+
+import os
+import json
+import argparse
+from tqdm import tqdm
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import argparse
-import json
-import os
-from tqdm import tqdm
 from configs import LOGIN_URL, LOGIN_USER, LOGIN_PASSWD, DATA_LINKS
 from utils import parse_score, check
 
@@ -86,21 +90,19 @@ if __name__ == "__main__":
                     .find_elements(By.CSS_SELECTOR, "a.reviewlink")[0]
                     .get_attribute("href")
                 )
-                id = cells[3].text
-                records.append((id, review_link))
-            except Exception:
+                records.append((cells[3].text, review_link))
+            except RuntimeError:
                 continue
 
         column_names = [header.text for header in headers[9:]]
         max_scores = [parse_score(column_name) for column_name in column_names]
 
         student_attemps = []
-        n_students = len(records)
 
         i = 1
 
-        for id, review_link in records:
-            print(f"\r{i}/{n_students}", end="")
+        for rid, review_link in records:
+            print(f"\r{i}/{len(records)}", end="")
             driver.get(review_link)
 
             wait.until(
@@ -122,7 +124,7 @@ if __name__ == "__main__":
                         record_on_question.append(cells[4].text)
                 record_on_questions.append(record_on_question)
 
-            student_attemps.append({"id": id, "records": record_on_questions})
+            student_attemps.append({"id": rid, "records": record_on_questions})
             i += 1
 
         data = {"max_scores": max_scores, "attemps": student_attemps}
@@ -132,5 +134,6 @@ if __name__ == "__main__":
         with open(
             f"data/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
             "w",
+            encoding="utf8",
         ) as json_file:
             json.dump(data, json_file)
