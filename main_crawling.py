@@ -13,7 +13,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from configs import LOGIN_URL, LOGIN_USER, LOGIN_PASSWD, DATA_LINKS
-from utils import parse_score, check
+from utils import parse_score
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-HK231")
@@ -128,8 +128,6 @@ if __name__ == "__main__":
             i += 1
 
         data = {"max_scores": max_scores, "attemps": student_attemps}
-
-        check(data)
 
         with open(
             f"data/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
