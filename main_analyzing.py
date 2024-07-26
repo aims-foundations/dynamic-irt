@@ -2,46 +2,65 @@
 Run this file to get students' score analysis.
 """
 import os
+import json
 import argparse
 from utils import (
-    load_data, process_scores, plot_scores, load_and_filter_data,
-    process_records, plot_data, collect_student_ids,
-    calculate_weekly_averages, plot_results,
-    process_scores_in_weeks
+    process_scores_per_question, plot_scores_per_question,
+    process_scores_all_questions, plot_scores_all_questions,
+    process_scores_per_week, plot_scores_per_week,
 )
 
-def plot_questions(course_question, class_question):
+def plot_per_question(course_question, class_question):
     """
     This function plots student grades per question.
     """
     namepath = f"{course_question}/{class_question}"
-    data = load_data(namepath)
-    processed_data = process_scores(data)
-    plot_scores(namepath, processed_data)
+    data = []
+    directory = f"data/{namepath}"
+    for json_file in os.listdir(directory):
+        if json_file.endswith(".json"):
+            file_path = os.path.join(directory, json_file)
+            with open(file_path, "r", encoding='utf-8') as file:
+                data.append(json.load(file))
+    processed_data = process_scores_per_question(data)
+    plot_scores_per_question(namepath, processed_data)
 
 def plot_all_questions(course_all_questions, class_all_questions):
     """
     This function plots student grades for all questions.
     """
     namepath = f"{course_all_questions}/{class_all_questions}"
-    data = load_and_filter_data(namepath)
+    all_data = []
+    for json_file in os.listdir(f"data/{namepath}"):
+        if json_file.endswith(".json"):
+            file_path = os.path.join(f"data/{namepath}", json_file)
+            with open(file_path, "r", encoding='utf-8') as file:
+                data = json.load(file)
+                all_data.append((json_file, data))
     global_max = max(
         len(attempt["records"])
-        for _, dataset in data
+        for _, dataset in all_data
         for attempt in dataset["attempts"]
     )
-    processed_records = process_records(data, global_max)
-    plot_data(namepath, processed_records, global_max)
+    processed_records = process_scores_all_questions(all_data, global_max)
+    plot_scores_all_questions(namepath, processed_records, global_max)
 
 def plot_weeks(weeks, course_weeks, class_weeks):
     """
     This function plots student grades in weeks.
     """
     namepath = f"{course_weeks}/{class_weeks}"
-    student_ids = collect_student_ids(weeks, namepath)
-    students = process_scores_in_weeks(weeks, student_ids, namepath)
-    weekly_averages = calculate_weekly_averages(students)
-    plot_results(weekly_averages, len(weeks[0]))
+    student_ids = set()
+    for week in weeks:
+        for exercise in week:
+            with open(os.path.join(f"data/{namepath}", exercise),
+                    "r", encoding='utf-8') as file:
+                data = json.load(file)
+            student_ids.update(attempt["id"] for attempt in data["attempts"])
+    students = process_scores_per_week(weeks, student_ids, namepath)
+    weekly_averages = {student_id: [sum(week) / len(week) for week in weeks_scores]
+        for student_id, weeks_scores in students.items()}
+    plot_scores_per_week(weekly_averages, len(weeks[0]))
 
 def main():
     """
@@ -57,7 +76,7 @@ def main():
     os.makedirs(f"plots/{course_name}", exist_ok=True)
     os.makedirs(f"plots/{course_name}/{class_name}", exist_ok=True)
 
-    plot_questions(course_name, class_name)
+    plot_per_question(course_name, class_name)
     plot_all_questions(course_name, class_name)
 
     weeks_file_list = [
