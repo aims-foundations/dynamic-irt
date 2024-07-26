@@ -8,8 +8,9 @@ import argparse
 import json
 import os
 from tqdm import tqdm
-from configs import LOGIN_URL, LOGIN_USER, LOGIN_PASSWD, DATA_LINKS
+from configs import LOGIN_USER, LOGIN_PASSWD, DATA_LINKS
 from utils import parse_score, check
+from urllib.parse import urlparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-HK231")
@@ -25,8 +26,17 @@ if __name__ == "__main__":
     driver = webdriver.Chrome(options=chrome_options)
     wait = WebDriverWait(driver, 20)
 
+    course_name = args.course_name
+    class_name = args.class_name
+    
+    target_link = DATA_LINKS[course_name][class_name]
+    parsed_url = urlparse(target_link)
+
+    # Extract the domain
+    domain = parsed_url.netloc
+    
     # Login
-    driver.get(LOGIN_URL)
+    driver.get(f"https://sso.hcmut.edu.vn/cas/login?service=https%3A%2F%2F{domain}%2Flogin%2Findex.php%3FauthCAS%3DCAS")
     username = driver.find_element(By.ID, "username")
     password = driver.find_element(By.ID, "password")
     username.send_keys(LOGIN_USER)
@@ -34,27 +44,24 @@ if __name__ == "__main__":
     password.send_keys(Keys.RETURN)
 
     # Get course homepage
-    course_name = args.course_name
-    class_name = args.class_name
-    driver.get(DATA_LINKS[course_name][class_name])
-
-    # Filter quizzes only
-    links = driver.find_elements(By.CSS_SELECTOR, "a.courseindex-link")
-    link_urls = [link.get_attribute("href") for link in links]
-    filtered_links = [
-        link
-        for link in link_urls
-        if link.startswith("https://e-learning.hcmut.edu.vn/mod/quiz/view.php?id=")
-    ]
+    driver.get(target_link)
+    xpath_expression = f"//a[starts-with(@href, 'https://{domain}/mod/quiz/view.php?id=')]"
+    try:
+        wait.until(EC.presence_of_element_located((By.XPATH, xpath_expression)))
+        filtered_links = driver.find_elements(By.XPATH, xpath_expression)
+    except Exception as e:
+        print("Error finding elements:", e)
+    
     QUIZZES_RESULT_LINKS = [
-        filtered_link.replace("view.php", "report.php") + "&mode=overview"
-        for filtered_link in filtered_links
+        link.get_attribute('href').replace("view.php", "report.php") + "&mode=overview"
+        for link in filtered_links
     ]
 
     # Create folders
     os.makedirs(f"data/{course_name}/{class_name}", exist_ok=True)
 
-    for quiz_link in tqdm(QUIZZES_RESULT_LINKS[21:], desc="Crawling"):
+    for quiz_link in tqdm(QUIZZES_RESULT_LINKS, desc="Crawling"):
+        print(quiz_link)
         driver.get(quiz_link)
 
         input_field = driver.find_elements(By.ID, "id_pagesize")
@@ -72,13 +79,17 @@ if __name__ == "__main__":
             continue
 
         records = []
-
-        table = driver.find_elements(By.CSS_SELECTOR, "table.generaltable")
-        headers = table[0].find_elements(By.TAG_NAME, "th")
+        
+        try:
+            table = driver.find_elements(By.CSS_SELECTOR, "table.generaltable")
+            headers = table[0].find_elements(By.TAG_NAME, "th")
+        except Exception:
+            continue
 
         students = table[0].find_elements(By.TAG_NAME, "tr")
 
         for student in students[1:-2]:
+            # print(student)
             try:
                 cells = student.find_elements(By.TAG_NAME, "td")
                 review_link = (
