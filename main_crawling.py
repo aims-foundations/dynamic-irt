@@ -117,7 +117,7 @@ if __name__ == "__main__":
             driver.get(review_link)
 
             wait.until(
-                EC.presidence_of_all_elements_located(
+                EC.prescence_of_all_elements_located(
                     (By.CSS_SELECTOR, ".que .history table")
                 )
             )
@@ -127,7 +127,7 @@ if __name__ == "__main__":
                 record_on_question = []
                 rows = table.find_elements(By.TAG_NAME, "tr")
                 for row in rows:
-                    cells = row.find_elements(By.TAG_name, "td")
+                    cells = row.find_elements(By.TAG_NAME, "td")
                     if len(cells) >= 4 and cells[2].text.startswith("Submit"):
                         record_on_question.append(cells[4].text)
                 record_on_questions.append(record_on_question)
