@@ -117,7 +117,7 @@ if __name__ == "__main__":
             driver.get(review_link)
 
             wait.until(
-                EC.prescence_of_all_elements_located(
+                EC.presence_of_all_elements_located(
                     (By.CSS_SELECTOR, ".que .history table")
                 )
             )
