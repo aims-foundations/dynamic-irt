@@ -1,308 +1,85 @@
 """
-This is the main process for analyzing crawled data.
+Run this file to get students' score analysis.
 """
-
 import os
 import json
 import argparse
-import numpy as np
-from matplotlib import pyplot as plt
+from utils import (
+    process_scores_per_question, plot_scores_per_question,
+    process_scores_all_questions, plot_scores_all_questions,
+    process_scores_per_week, plot_scores_per_week,
+)
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-HK231")
-parser.add_argument("--class_name", help="Class Name", type=str, default="L09")
-args = parser.parse_args()
-
-
-def plot_questions(course_name, class_name):
+def plot_per_question(course_question, class_question):
     """
     This function plots student grades per question.
     """
-    for json_file in os.listdir(f"data/{course_name}/{class_name}"):
-        if not json_file.endswith(".json"):
-            continue
+    namepath = f"{course_question}/{class_question}"
+    data = []
+    directory = f"data/{namepath}"
+    for json_file in os.listdir(directory):
+        if json_file.endswith(".json"):
+            file_path = os.path.join(directory, json_file)
+            with open(file_path, "r", encoding='utf-8') as file:
+                data.append(json.load(file))
+    processed_data = process_scores_per_question(data)
+    plot_scores_per_question(namepath, processed_data)
 
-        name = json_file
-        json_file = os.path.join(f"data/{course_name}/{class_name}", json_file)
-        with open(json_file, "r", encoding="utf8") as f:
-            data = json.load(f)
-
-    # Question q
-    for q in range(len(data["max_scores"])):
-        plt.clf()
-
-        max_score = data["max_scores"][q]
-        attemps = data["attemps"]
-        ids = [attemp["id"] for attemp in attemps]
-        records = [attemp["records"][q] for attemp in attemps]
-        try:
-            records = [
-                [float(mark) * 10 / max_score for mark in student_marks]
-                for student_marks in records
-            ]
-        except RuntimeError:
-            continue
-
-        # Find the maximum number of attempts across all students
-        max_attempts = max(len(student_marks) for student_marks in records)
-
-        # Generate x values (attempts)
-        x = list(range(1, max_attempts + 1))
-
-        # Find the average score for each number of attemps
-        # Pad the marks of each student with highest marks
-        padded_records = []
-        for student_marks in records:
-            if student_marks:
-                padded_records.append(
-                    student_marks
-                    + [max(student_marks)] * (max_attempts - len(student_marks))
-                )
-            else:
-                padded_records.append([0] * max_attempts)
-        # Convert the list of lists to a NumPy array
-        padded_records = np.array(padded_records)
-        # Calculate the average marks for each attempt number across all students
-        average_marks = np.nanmean(padded_records, axis=0)
-
-        # Plot each student's attempts
-        for i, student_marks in enumerate(padded_records):
-            plt.plot(x, student_marks, label=f"{ids[i]}", color="blue", alpha=0.3)
-
-        # Plot the average marks as a bold line
-        plt.plot(x, average_marks, label="Average Marks", linewidth=3, color="blue")
-
-        # Add labels and legend
-        plt.xlabel("Attempts")
-        plt.ylabel("Marks")
-        plt.title(f"{name} - Q{q+1}")
-
-        plt.savefig(f"plots/{course_name}/{class_name}/{name}-Q{q+1}.png")
-        plt.close()
-
-
-def plot_all_questions(course_name, class_name):
+def plot_all_questions(course_all_questions, class_all_questions):
     """
-    This function plots all student grades of all questions in each week.
+    This function plots student grades for all questions.
     """
-    global_max = 0
-    for json_file in os.listdir(f"data/{course_name}/{class_name}"):
-        if not json_file.endswith(".json"):
-            continue
+    namepath = f"{course_all_questions}/{class_all_questions}"
+    all_data = []
+    for json_file in os.listdir(f"data/{namepath}"):
+        if json_file.endswith(".json"):
+            file_path = os.path.join(f"data/{namepath}", json_file)
+            with open(file_path, "r", encoding='utf-8') as file:
+                data = json.load(file)
+                all_data.append((json_file, data))
+    global_max = max(
+        len(attempt["records"])
+        for _, dataset in all_data
+        for attempt in dataset["attempts"]
+    )
+    processed_records = process_scores_all_questions(all_data, global_max)
+    plot_scores_all_questions(namepath, processed_records, global_max)
 
-        name = json_file
-        print(name)
-        json_file = os.path.join(f"data/{course_name}/{class_name}", json_file)
-        with open(json_file, "r", encoding="utf8") as f:
-            data = json.load(f)
-
-        # Question q
-        for q in range(len(data["max_scores"])):
-
-            max_score = data["max_scores"][q]
-            attemps = data["attemps"]
-            ids = [attemp["id"] for attemp in attemps]
-            records = [attemp["records"][q] for attemp in attemps]
-            try:
-                records = [
-                    [float(mark) * 10 / max_score for mark in student_marks]
-                    for student_marks in records
-                ]
-            except RuntimeError:
-                continue
-
-            # Find the maximum number of attempts across all students
-            max_attempts = max(len(student_marks) for student_marks in records)
-            global_max = max(global_max, max_attempts)
-
-    plt.clf()
-
-    all_padded_records = []
-
-    for json_file in os.listdir(f"data/{course_name}/{class_name}"):
-        if not json_file.endswith(".json"):
-            continue
-
-        name = json_file
-        json_file = os.path.join(f"data/{course_name}/{class_name}", json_file)
-        with open(json_file, "r", encoding="utf8") as f:
-            data = json.load(f)
-
-        # Question q
-        for q in range(len(data["max_scores"])):
-
-            max_score = data["max_scores"][q]
-            attemps = data["attemps"]
-            ids = [attemp["id"] for attemp in attemps]
-            records = [attemp["records"][q] for attemp in attemps]
-            try:
-                if name == "Graph.json":
-                    max_score = 2
-                records = [
-                    [float(mark) * 10 / max_score for mark in student_marks]
-                    for student_marks in records
-                ]
-            except RuntimeError:
-                continue
-
-            # Generate x values (attempts)
-            x = list(range(1, global_max + 1))
-
-            # Find the average score for each number of attemps
-            # Pad the marks of each student with highest marks
-            padded_records = []
-            for student_marks in records:
-                if student_marks:
-                    padded_records.append(
-                        student_marks
-                        + [max(student_marks)] * (global_max - len(student_marks))
-                    )
-                    all_padded_records.append(
-                        student_marks
-                        + [max(student_marks)] * (global_max - len(student_marks))
-                    )
-                else:
-                    padded_records.append([0] * global_max)
-                    all_padded_records.append([0] * global_max)
-
-            # Convert the list of lists to a NumPy array
-            padded_records = np.array(padded_records)
-
-            # Plot each student's attempts
-            for i, student_marks in enumerate(padded_records):
-                plt.plot(x, student_marks, label=f"{ids[i]}", color="blue", alpha=0.2)
-
-    all_padded_records = np.array(all_padded_records)
-    all_average_marks = np.nanmean(all_padded_records, axis=0)
-    plt.plot(x, all_average_marks, label="All Average Marks", linewidth=3, color="Red")
-
-    # Add labels and legend
-    plt.xlabel("Attempts")
-    plt.ylabel("Marks")
-    plt.title(f"All questions ({class_name})")
-
-    plt.savefig(f"plots/{course_name}/{class_name}/all-questions.png")
-    plt.close()
-
-
-def plot_weeks(weeks, course_name, class_name):
+def plot_weeks(weeks, course_weeks, class_weeks):
     """
-    This function plots all student grades of all questions across all weeks.
+    This function plots student grades in weeks.
     """
-    # Get all unique student IDs
-    ids_set = set()
+    namepath = f"{course_weeks}/{class_weeks}"
+    student_ids = set()
     for week in weeks:
-        for path in week:
-            with open(
-                os.path.join(f"data/{course_name}/{class_name}", path),
-                "r",
-                encoding="utf8",
-            ) as f:
-                data = json.load(f)
-                attemps = data["attemps"]
-                ids = [attemp["id"] for attemp in attemps]
-            ids_set.update(ids)
-            print("Week:", week, "->", len(ids))
-    print(f"Total -> {len(ids_set)}")
-    student_ids = list(ids_set)
+        for exercise in week:
+            with open(os.path.join(f"data/{namepath}", exercise),
+                    "r", encoding='utf-8') as file:
+                data = json.load(file)
+            student_ids.update(attempt["id"] for attempt in data["attempts"])
+    students = process_scores_per_week(weeks, student_ids, namepath)
+    weekly_averages = {student_id: [sum(week) / len(week) for week in weeks_scores]
+        for student_id, weeks_scores in students.items()}
+    plot_scores_per_week(weekly_averages, len(weeks[0]))
 
-    students = {sid: [] for sid in student_ids}
-    for week in weeks[:]:
-        for sid in student_ids:
-            students[sid].append([])
-        for exercise in week[:]:
-            with open(
-                os.path.join(f"data/{course_name}/{class_name}", exercise),
-                "r",
-                encoding="utf8",
-            ) as f:
-                data = json.load(f)
-            attemps = data["attemps"]
-
-            this_exercise_result = {}
-            ids_do_exercise = []
-            for attemp in attemps:
-                sid = attemp["id"]
-                records = attemp["records"]
-                records: list[list]
-
-                maxes = []
-                for question_marks in records:
-
-                    # Special cases
-                    if exercise == "Graph.json":
-                        question_marks = [
-                            float(mark) * 5 / 7 for mark in question_marks
-                        ]
-                    if exercise == "Week_5_Exam.json":
-                        question_marks = [
-                            float(mark) * 10 / 11 for mark in question_marks
-                        ]
-
-                    if question_marks:
-                        try:
-                            maxes.append(max(float(mark) for mark in question_marks))
-                        except RuntimeError:
-                            maxes.append(0)
-                    else:
-                        maxes.append(0)
-
-                result = sum(maxes)
-
-                student_last_result = this_exercise_result.get(sid, 0)
-                if result >= student_last_result:
-                    this_exercise_result[sid] = result
-
-                ids_do_exercise.append(sid)
-
-            for sid in student_ids:
-                if sid in ids_do_exercise:
-                    students[sid][-1].append(this_exercise_result[sid])
-                else:
-                    students[sid][-1].append(0)
-
-    grouped_by_week = students.copy()
-    for rid, records in grouped_by_week.items():
-        grouped_by_week[rid] = [sum(record) / len(record) for record in records]
-
-    # Calculate the average result for each test
-    num_tests = 6
-    avg_results = [
-        sum(all_student_scores_in_one_week) / len(all_student_scores_in_one_week)
-        for all_student_scores_in_one_week in zip(*grouped_by_week.values())
-    ]
-
-    # Generate x values (test order)
-    test_order = list(range(1, num_tests + 1))
-
-    # Plot each student's test results
-    for wid, week_avg in grouped_by_week.items():
-        plt.plot(test_order, week_avg, label=f"Student {wid}", color="blue", alpha=0.3)
-
-    # Plot the average line
-    plt.plot(test_order, avg_results, label="Average", linewidth=2, color="black")
-
-    # Add labels and title
-    plt.xlabel("Week")
-    plt.ylabel("Result")
-    plt.title("Weekly Results of Students")
-
-    # Show the plot
-    plt.grid(True)
-    plt.savefig(f"plots/{course_name}/{class_name}/all-weeks.png")
-    plt.close()
-
-
-if __name__ == "__main__":
+def main():
+    """
+    Main function
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-HK231")
+    parser.add_argument("--class_name", help="Class Name", type=str, default="L09")
+    args = parser.parse_args()
+    course_name = args.course_name
+    class_name = args.class_name
     os.makedirs("plots", exist_ok=True)
-    os.makedirs(f"plots/{args.course_name}", exist_ok=True)
-    os.makedirs(f"plots/{args.course_name}/{args.class_name}", exist_ok=True)
+    os.makedirs(f"plots/{course_name}", exist_ok=True)
+    os.makedirs(f"plots/{course_name}/{class_name}", exist_ok=True)
 
-    plot_questions(args.course_name, args.class_name)
+    plot_per_question(course_name, class_name)
+    plot_all_questions(course_name, class_name)
 
-    plot_all_questions(args.course_name, args.class_name)
-
-    weeks = [
+    weeks_file_list = [
         [
             "OOP_Review.json",
             "Recursion.json",
@@ -327,4 +104,8 @@ if __name__ == "__main__":
         ["Week_6_Exam.json", "Graph.json", "Hash.json"],
     ]
 
-    plot_weeks(weeks, args.course_name, args.class_name)
+    plot_weeks(weeks_file_list, course_name, class_name)
+
+if __name__ == "__main__":
+    main()
+    
