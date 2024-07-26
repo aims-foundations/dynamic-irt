@@ -2,3 +2,4 @@ data/
 plots/
 .ipynb_checkpoints/
 __pycache__/
+test.py
