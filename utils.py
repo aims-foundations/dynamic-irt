@@ -19,20 +19,7 @@ def check(data):
     data = data["attemps"]
     print(f"Checking: n={len(data)}, sample: {data[0]}")
 
-def load_data(namepath):
-    """
-        Load data.
-    """
-    data = []
-    directory = f"data/{namepath}"
-    for json_file in os.listdir(directory):
-        if json_file.endswith(".json"):
-            file_path = os.path.join(directory, json_file)
-            with open(file_path, "r", encoding='utf-8') as file:
-                data.append(json.load(file))
-    return data
-
-def process_scores(data):
+def process_scores_per_question(data):
     """
         Process scores.
     """
@@ -50,7 +37,7 @@ def process_scores(data):
             processed_data.append((ids, scaled_records))
     return processed_data
 
-def plot_scores(namepath, processed_data):
+def plot_scores_per_question(namepath, processed_data):
     """
         Plot scores.
     """
@@ -76,56 +63,36 @@ def plot_scores(namepath, processed_data):
         plt.savefig(f"plots/{namepath}.png")
         plt.close()
 
-def load_and_filter_data(namepath):
-    """
-        Load and filter data.
-    """
-    all_data = []
-    for json_file in os.listdir(f"data/{namepath}"):
-        if json_file.endswith(".json"):
-            file_path = os.path.join(f"data/{namepath}", json_file)
-            with open(file_path, "r", encoding='utf-8') as file:
-                data = json.load(file)
-                all_data.append((json_file, data))
-    return all_data
-
-def process_records(data, global_max):
+def process_scores_all_questions(data, global_max):
     """
         Process records.
     """
     processed_records = []
     for dataset in data:
         for question in range(len(dataset["max_scores"])):
-            max_score = dataset["max_content"][question]
+            # max_score = dataset["max_content"][question]
             attempts = dataset["attempts"]
             ids = [attempt["id"] for attempt in attempts]
             records = [attempt["records"][question] for attempt in attempts]
             # Adjusting scores
-            adjusted_records = [
-                [float(mark) * 10 / max_score for mark in student_marks]
-                for student_marks in records
-            ]
+            # adjusted_records = [
+            #     [float(mark) * 10 / max_score for mark in student_marks]
+            #     for student_marks in records
+            # ]
             # Padding records
-            padded_records = pad_records(adjusted_records, global_max)
+            padded_records = []
+            for student_marks in records:
+                if student_marks:
+                    padded_records.append(student_marks +
+                        [max(student_marks)] * (global_max - len(student_marks)))
+                else:
+                    padded_records.append([0] * global_max)
             processed_records.append((ids, padded_records))
     return processed_records
 
-def pad_records(records, max_attempts):
+def plot_scores_all_questions(namepath, processed_records, global_max):
     """
-        Pad records.
-    """
-    padded = []
-    for student_marks in records:
-        if student_marks:
-            padded.append(student_marks +
-                [max(student_marks)] * (max_attempts - len(student_marks)))
-        else:
-            padded.append([0] * max_attempts)
-    return padded
-
-def plot_data(namepath, processed_records, global_max):
-    """
-        Plot data.
+        Plot scores all questions.
     """
     plt.clf()
     all_padded_records = []
@@ -147,25 +114,7 @@ def plot_data(namepath, processed_records, global_max):
     plt.savefig(f"plots/{namepath}/all-questions.png")
     plt.close()
 
-def load_json_data(filepath):
-    """
-        Load json data.
-    """
-    with open(filepath, "r", encoding='utf-8') as file:
-        return json.load(file)
-
-def collect_student_ids(weeks, namepath):
-    """
-        Collect student ids.
-    """
-    ids_set = set()
-    for week in weeks:
-        for exercise in week:
-            data = load_json_data(os.path.join(f"data/{namepath}", exercise))
-            ids_set.update(attempt["id"] for attempt in data["attempts"])
-    return ids_set
-
-def process_scores_in_weeks(weeks, student_ids, namepath):
+def process_scores_per_week(weeks, student_ids, namepath):
     """
         Process scores in weeks.
     """
@@ -174,40 +123,22 @@ def process_scores_in_weeks(weeks, student_ids, namepath):
         for student_id in student_ids:
             students[student_id].append([])
         for exercise in week:
-            data = load_json_data(os.path.join(f"data/{namepath}", exercise))
-            process_exercise(data, students)
+            with open(os.path.join(f"data/{namepath}", exercise)
+                    , "r", encoding='utf-8') as file:
+                data = json.load(file)
+            for attempt in data["attempts"]:
+                student_id = attempt["id"]
+                for record in attempt["records"]:
+                    if data["exercise"] == "Graph.json":
+                        max_scores = max(float(mark) * 5 / 7 for mark in record)
+                    elif data["exercise"] == "Week_5_Exam.json":
+                        max_scores = max(float(mark) * 10 / 11 for mark in record)
+                    else:
+                        max_scores = max(record, default=0, key=float)
+                students[student_id][-1].append(max(max_scores, default=0))
     return students
 
-def process_exercise(data, students):
-    """
-        Process exercise.
-    """
-    for attempt in data["attempts"]:
-        student_id = attempt["id"]
-        max_scores = calculate_max_scores(attempt["records"], data["exercise"])
-        # Update the student's record for the current week
-        students[student_id][-1].append(max(max_scores, default=0))
-
-def calculate_max_scores(records, exercise_name):
-    """
-        Calculate max scores.
-    """
-    for record in records:
-        if exercise_name == "Graph.json":
-            yield max(float(mark) * 5 / 7 for mark in record)
-        elif exercise_name == "Week_5_Exam.json":
-            yield max(float(mark) * 10 / 11 for mark in record)
-        else:
-            yield max(record, default=0, key=float)
-
-def calculate_weekly_averages(students):
-    """
-        Calculate weekly averages.
-    """
-    return {student_id: [sum(week) / len(week) for week in weeks_scores]
-        for student_id, weeks_scores in students.items()}
-
-def plot_results(students, num_tests):
+def plot_scores_per_week(students, num_tests):
     """
         Plot results.
     """
@@ -222,4 +153,3 @@ def plot_results(students, num_tests):
     plt.legend()
     plt.grid(True)
     plt.show()
-    
