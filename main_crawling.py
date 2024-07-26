@@ -1,16 +1,20 @@
+"""
+Run this file to crawl students' scores.
+"""
+import argparse
+import json
+import os
+from urllib.parse import urlparse
+from tqdm import tqdm
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import argparse
-import json
-import os
-from tqdm import tqdm
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from configs import LOGIN_USER, LOGIN_PASSWD, DATA_LINKS
 from utils import parse_score, check
-from urllib.parse import urlparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-HK231")
@@ -28,15 +32,15 @@ if __name__ == "__main__":
 
     course_name = args.course_name
     class_name = args.class_name
-    
     target_link = DATA_LINKS[course_name][class_name]
     parsed_url = urlparse(target_link)
-
     # Extract the domain
     domain = parsed_url.netloc
-    
     # Login
-    driver.get(f"https://sso.hcmut.edu.vn/cas/login?service=https%3A%2F%2F{domain}%2Flogin%2Findex.php%3FauthCAS%3DCAS")
+    driver.get(
+        "https://sso.hcmut.edu.vn/cas/login?service=https%3A%2F%2F"
+        f"{domain}/login/index.php%3FauthCAS%3DCAS"
+    )
     username = driver.find_element(By.ID, "username")
     password = driver.find_element(By.ID, "password")
     username.send_keys(LOGIN_USER)
@@ -49,9 +53,10 @@ if __name__ == "__main__":
     try:
         wait.until(EC.presence_of_element_located((By.XPATH, xpath_expression)))
         filtered_links = driver.find_elements(By.XPATH, xpath_expression)
-    except Exception as e:
-        print("Error finding elements:", e)
-    
+    except NoSuchElementException as e:
+        print("Element not found:", e)
+    except TimeoutException as e:
+        print("Request timed out:", e)
     QUIZZES_RESULT_LINKS = [
         link.get_attribute('href').replace("view.php", "report.php") + "&mode=overview"
         for link in filtered_links
@@ -79,17 +84,16 @@ if __name__ == "__main__":
             continue
 
         records = []
-        
         try:
             table = driver.find_elements(By.CSS_SELECTOR, "table.generaltable")
             headers = table[0].find_elements(By.TAG_NAME, "th")
-        except Exception:
+        except NoSuchElementException as e:
+            continue
+        except TimeoutException as e:
             continue
 
         students = table[0].find_elements(By.TAG_NAME, "tr")
-
         for student in students[1:-2]:
-            # print(student)
             try:
                 cells = student.find_elements(By.TAG_NAME, "td")
                 review_link = (
@@ -97,51 +101,44 @@ if __name__ == "__main__":
                     .find_elements(By.CSS_SELECTOR, "a.reviewlink")[0]
                     .get_attribute("href")
                 )
-                id = cells[3].text
-                records.append((id, review_link))
-            except Exception:
+                student_id = cells[3].text  # Renamed 'id' to 'student_id'
+                records.append((student_id, review_link))
+            except NoSuchElementException as e:
                 continue
-
+            except TimeoutException as e:
+                continue
         column_names = [header.text for header in headers[9:]]
         max_scores = [parse_score(column_name) for column_name in column_names]
-
         student_attemps = []
-        n_students = len(records)
-
+        N_STUDENTS = len(records)
         i = 1
-
-        for id, review_link in records:
-            print(f"\r{i}/{n_students}", end="")
+        for student_id, review_link in records:
+            print(f"\r{i}/{N_STUDENTS}", end="")
             driver.get(review_link)
 
             wait.until(
-                EC.presence_of_all_elements_located(
+                EC.presidence_of_all_elements_located(
                     (By.CSS_SELECTOR, ".que .history table")
                 )
             )
-
             tables = driver.find_elements(By.CSS_SELECTOR, ".que .history table")
-
             record_on_questions = []
-
             for table in tables:
                 record_on_question = []
                 rows = table.find_elements(By.TAG_NAME, "tr")
                 for row in rows:
-                    cells = row.find_elements(By.TAG_NAME, "td")
+                    cells = row.find_elements(By.TAG_name, "td")
                     if len(cells) >= 4 and cells[2].text.startswith("Submit"):
                         record_on_question.append(cells[4].text)
                 record_on_questions.append(record_on_question)
 
-            student_attemps.append({"id": id, "records": record_on_questions})
+            student_attemps.append({"student_id": student_id, "records": record_on_questions})
             i += 1
 
         data = {"max_scores": max_scores, "attemps": student_attemps}
-
         check(data)
-
         with open(
             f"data/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
             "w",
-        ) as json_file:
+            encoding='utf-8') as json_file:
             json.dump(data, json_file)
