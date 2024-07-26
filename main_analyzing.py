@@ -1,3 +1,7 @@
+"""
+This is the main process for analyzing crawled data.
+"""
+
 import os
 import json
 import argparse
@@ -20,7 +24,7 @@ def plot_questions(course_name, class_name):
 
         name = json_file
         json_file = os.path.join(f"data/{course_name}/{class_name}", json_file)
-        with open(json_file, "r") as f:
+        with open(json_file, "r", encoding="utf8") as f:
             data = json.load(f)
 
     # Question q
@@ -36,7 +40,7 @@ def plot_questions(course_name, class_name):
                 [float(mark) * 10 / max_score for mark in student_marks]
                 for student_marks in records
             ]
-        except Exception:
+        except RuntimeError:
             continue
 
         # Find the maximum number of attempts across all students
@@ -79,7 +83,7 @@ def plot_questions(course_name, class_name):
 
 def plot_all_questions(course_name, class_name):
     """
-    This function plots all student grades of all questions.
+    This function plots all student grades of all questions in each week.
     """
     global_max = 0
     for json_file in os.listdir(f"data/{course_name}/{class_name}"):
@@ -89,7 +93,7 @@ def plot_all_questions(course_name, class_name):
         name = json_file
         print(name)
         json_file = os.path.join(f"data/{course_name}/{class_name}", json_file)
-        with open(json_file, "r") as f:
+        with open(json_file, "r", encoding="utf8") as f:
             data = json.load(f)
 
         # Question q
@@ -104,7 +108,7 @@ def plot_all_questions(course_name, class_name):
                     [float(mark) * 10 / max_score for mark in student_marks]
                     for student_marks in records
                 ]
-            except Exception:
+            except RuntimeError:
                 continue
 
             # Find the maximum number of attempts across all students
@@ -121,7 +125,7 @@ def plot_all_questions(course_name, class_name):
 
         name = json_file
         json_file = os.path.join(f"data/{course_name}/{class_name}", json_file)
-        with open(json_file, "r") as f:
+        with open(json_file, "r", encoding="utf8") as f:
             data = json.load(f)
 
         # Question q
@@ -138,7 +142,7 @@ def plot_all_questions(course_name, class_name):
                     [float(mark) * 10 / max_score for mark in student_marks]
                     for student_marks in records
                 ]
-            except Exception:
+            except RuntimeError:
                 continue
 
             # Generate x values (attempts)
@@ -181,27 +185,36 @@ def plot_all_questions(course_name, class_name):
     plt.close()
 
 
-def plot_weeks(WEEKS, course_name, class_name):
+def plot_weeks(weeks, course_name, class_name):
+    """
+    This function plots all student grades of all questions across all weeks.
+    """
     # Get all unique student IDs
     ids_set = set()
-    for WEEK in WEEKS:
-        for path in WEEK:
-            with open(os.path.join(f"data/{course_name}/{class_name}", path), "r") as f:
+    for week in weeks:
+        for path in week:
+            with open(
+                os.path.join(f"data/{course_name}/{class_name}", path),
+                "r",
+                encoding="utf8",
+            ) as f:
                 data = json.load(f)
                 attemps = data["attemps"]
                 ids = [attemp["id"] for attemp in attemps]
             ids_set.update(ids)
-            print("Week:", WEEK, "->", len(ids))
+            print("Week:", week, "->", len(ids))
     print(f"Total -> {len(ids_set)}")
     student_ids = list(ids_set)
 
-    STUDENTS = {id: [] for id in student_ids}
-    for WEEK in WEEKS[:]:
-        for id in student_ids:
-            STUDENTS[id].append([])
-        for EXERCISE in WEEK[:]:
+    students = {sid: [] for sid in student_ids}
+    for week in weeks[:]:
+        for sid in student_ids:
+            students[sid].append([])
+        for exercise in week[:]:
             with open(
-                os.path.join(f"data/{course_name}/{class_name}", EXERCISE), "r"
+                os.path.join(f"data/{course_name}/{class_name}", exercise),
+                "r",
+                encoding="utf8",
             ) as f:
                 data = json.load(f)
             attemps = data["attemps"]
@@ -209,7 +222,7 @@ def plot_weeks(WEEKS, course_name, class_name):
             this_exercise_result = {}
             ids_do_exercise = []
             for attemp in attemps:
-                id = attemp["id"]
+                sid = attemp["id"]
                 records = attemp["records"]
                 records: list[list]
 
@@ -217,54 +230,54 @@ def plot_weeks(WEEKS, course_name, class_name):
                 for question_marks in records:
 
                     # Special cases
-                    if EXERCISE == "Graph.json":
+                    if exercise == "Graph.json":
                         question_marks = [
                             float(mark) * 5 / 7 for mark in question_marks
                         ]
-                    if EXERCISE == "Week_5_Exam.json":
+                    if exercise == "Week_5_Exam.json":
                         question_marks = [
                             float(mark) * 10 / 11 for mark in question_marks
                         ]
 
                     if question_marks:
                         try:
-                            maxes.append(max([float(mark) for mark in question_marks]))
-                        except Exception:
+                            maxes.append(max(float(mark) for mark in question_marks))
+                        except RuntimeError:
                             maxes.append(0)
                     else:
                         maxes.append(0)
-                # print(EXERCISE, id, maxes)
+
                 result = sum(maxes)
 
-                student_last_result = this_exercise_result.get(id, 0)
+                student_last_result = this_exercise_result.get(sid, 0)
                 if result >= student_last_result:
-                    this_exercise_result[id] = result
+                    this_exercise_result[sid] = result
 
-                ids_do_exercise.append(id)
+                ids_do_exercise.append(sid)
 
-            for id in student_ids:
-                if id in ids_do_exercise:
-                    STUDENTS[id][-1].append(this_exercise_result[id])
+            for sid in student_ids:
+                if sid in ids_do_exercise:
+                    students[sid][-1].append(this_exercise_result[sid])
                 else:
-                    STUDENTS[id][-1].append(0)
+                    students[sid][-1].append(0)
 
-    GROUPED_BY_WEEK = STUDENTS.copy()
-    for id, records in GROUPED_BY_WEEK.items():
-        GROUPED_BY_WEEK[id] = [sum(record) / len(record) for record in records]
+    grouped_by_week = students.copy()
+    for rid, records in grouped_by_week.items():
+        grouped_by_week[rid] = [sum(record) / len(record) for record in records]
 
     # Calculate the average result for each test
     num_tests = 6
     avg_results = [
         sum(all_student_scores_in_one_week) / len(all_student_scores_in_one_week)
-        for all_student_scores_in_one_week in zip(*GROUPED_BY_WEEK.values())
+        for all_student_scores_in_one_week in zip(*grouped_by_week.values())
     ]
 
     # Generate x values (test order)
     test_order = list(range(1, num_tests + 1))
 
     # Plot each student's test results
-    for id, week_avg in GROUPED_BY_WEEK.items():
-        plt.plot(test_order, week_avg, label=f"Student {id}", color="blue", alpha=0.3)
+    for wid, week_avg in grouped_by_week.items():
+        plt.plot(test_order, week_avg, label=f"Student {wid}", color="blue", alpha=0.3)
 
     # Plot the average line
     plt.plot(test_order, avg_results, label="Average", linewidth=2, color="black")
@@ -281,18 +294,15 @@ def plot_weeks(WEEKS, course_name, class_name):
 
 
 if __name__ == "__main__":
-    course_name = args.course_name
-    class_name = args.class_name
-
     os.makedirs("plots", exist_ok=True)
-    os.makedirs(f"plots/{course_name}", exist_ok=True)
-    os.makedirs(f"plots/{course_name}/{class_name}", exist_ok=True)
+    os.makedirs(f"plots/{args.course_name}", exist_ok=True)
+    os.makedirs(f"plots/{args.course_name}/{args.class_name}", exist_ok=True)
 
-    plot_questions(course_name, class_name)
+    plot_questions(args.course_name, args.class_name)
 
-    plot_all_questions(course_name, class_name)
+    plot_all_questions(args.course_name, args.class_name)
 
-    WEEKS = [
+    weeks = [
         [
             "OOP_Review.json",
             "Recursion.json",
@@ -317,4 +327,4 @@ if __name__ == "__main__":
         ["Week_6_Exam.json", "Graph.json", "Hash.json"],
     ]
 
-    plot_weeks(WEEKS, course_name, class_name)
+    plot_weeks(weeks, args.course_name, args.class_name)
