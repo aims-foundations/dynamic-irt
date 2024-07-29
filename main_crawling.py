@@ -21,6 +21,9 @@ parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-H
 parser.add_argument("--class_name", help="Class Name", type=str, default="L09")
 args = parser.parse_args()
 
+
+# def process(driver, quiz_link):
+    
 if __name__ == "__main__":
     # Chrome setup
     chrome_options = Options()
@@ -65,80 +68,116 @@ if __name__ == "__main__":
     # Create folders
     os.makedirs(f"data/{course_name}/{class_name}", exist_ok=True)
 
+    # print(driver.current_url)
+
     for quiz_link in tqdm(QUIZZES_RESULT_LINKS, desc="Crawling"):
         print(quiz_link)
         driver.get(quiz_link)
+        
+        wait.until(EC.visibility_of_element_located((By.ID, 'region-main')))
+        lab_name = driver.title.split(":")[0].strip()
+        
+        data = {
+            'lab_name': lab_name,
+            'list_questions': [],
+            'student_answers': []
+        }
+        
+        wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'table')))
+        student_rows = driver.find_elements(By.CSS_SELECTOR, 'table tbody tr')
 
-        input_field = driver.find_elements(By.ID, "id_pagesize")
+        for index, row in enumerate(student_rows):
+            if 'emptyrow' in row.get_attribute('class'):
+                print("Skipping empty row.")
+                continue  # Skip this row and move to the next one
 
-        # Clear the current value
-        input_field[0].clear()
-
-        # Set the new value to '100'
-        input_field[0].send_keys("100")
-
-        # Simulate pressing the Enter key
-        input_field[0].send_keys(Keys.ENTER)
-
-        if "Backup" in driver.title or "Bù" in driver.title or "SEB" in driver.title:
-            continue
-
-        records = []
-        try:
-            table = driver.find_elements(By.CSS_SELECTOR, "table.generaltable")
-            headers = table[0].find_elements(By.TAG_NAME, "th")
-        except NoSuchElementException as e:
-            continue
-        except TimeoutException as e:
-            continue
-
-        students = table[0].find_elements(By.TAG_NAME, "tr")
-        for student in students[1:-2]:
             try:
-                cells = student.find_elements(By.TAG_NAME, "td")
-                review_link = (
-                    cells[2]
-                    .find_elements(By.CSS_SELECTOR, "a.reviewlink")[0]
-                    .get_attribute("href")
-                )
-                student_id = cells[3].text  # Renamed 'id' to 'student_id'
-                records.append((student_id, review_link))
-            except NoSuchElementException as e:
-                continue
-            except TimeoutException as e:
-                continue
-        column_names = [header.text for header in headers[9:]]
-        max_scores = [parse_score(column_name) for column_name in column_names]
-        student_attemps = []
-        N_STUDENTS = len(records)
-        i = 1
-        for student_id, review_link in records:
-            print(f"\r{i}/{N_STUDENTS}", end="")
-            driver.get(review_link)
+                student_link = f'mod-quiz-report-overview-report_r{index}_c2'
+                link = wait.until(EC.presence_of_element_located((By.ID, student_link)))
 
-            wait.until(
-                EC.presence_of_all_elements_located(
-                    (By.CSS_SELECTOR, ".que .history table")
-                )
-            )
-            tables = driver.find_elements(By.CSS_SELECTOR, ".que .history table")
-            record_on_questions = []
-            for table in tables:
-                record_on_question = []
-                rows = table.find_elements(By.TAG_NAME, "tr")
+                try:
+                    student_name = link.find_element(By.TAG_NAME, 'a').text.strip()
+                    review_link = link.find_element(By.CSS_SELECTOR, 'a.reviewlink').get_attribute('href')
+                    student_id = row.find_element(By.CSS_SELECTOR, 'td.cell.c3').text.strip()
+                    print(student_name, review_link, student_id)
+
+                    data['student_answers'].append({
+                        'name': student_name,
+                        'id': student_id,
+                        'review_link': review_link
+                    })
+                except NoSuchElementException:
+                    print(f"Missing expected elements within the link ID {student_link}")
+                    continue
+            
+            except TimeoutException:
+                print(f"Element with ID {student_link} did not appear in time.")
+                continue
+
+        driver.get(data['student_answers'][0]['review_link'])
+        try:
+            questions = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.que.coderunner')))
+            list_questions = []
+
+            for question in questions:
+                question_text = " ".join(question.find_element(By.CSS_SELECTOR, 'div.content div.formulation').text.split())
+                coderunner_examples_div = question.find_element(By.CSS_SELECTOR, 'div.coderunner-examples')
+                expected_output_table = coderunner_examples_div.find_element(By.CSS_SELECTOR, 'table.coderunnerexamples')
+
+                rows = expected_output_table.find_elements(By.CSS_SELECTOR, 'tbody tr')
+                expected_outputs = []
                 for row in rows:
-                    cells = row.find_elements(By.TAG_NAME, "td")
-                    if len(cells) >= 4 and cells[2].text.startswith("Submit"):
-                        record_on_question.append(cells[4].text)
-                record_on_questions.append(record_on_question)
+                    test_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c0 pre.tablecell').text
+                    result_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c1 pre.tablecell').text
+                    expected_outputs.append({'test': test_cell, 'result': result_cell})
 
-            student_attemps.append({"student_id": student_id, "records": record_on_questions})
-            i += 1
+                list_questions.append({
+                    'question': question_text,
+                    'expected_outputs': expected_outputs
+                })
 
-        data = {"max_scores": max_scores, "attemps": student_attemps}
-        check(data)
+            data['list_questions'] = list_questions
+        except TimeoutException:
+            print(f"Timeout.")
+            continue
+
+        for record in data['student_answers']:
+            driver.get(record['review_link'])
+            attempt_data = []
+
+            wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'responsehistoryheader')))
+            history_headers = driver.find_elements(By.XPATH, "//h4[contains(text(), 'Response history')]")
+
+            for index, header in enumerate(history_headers):
+                table = header.find_element(By.XPATH, "following-sibling::div//table[@class='generaltable']")
+                rows = table.find_elements(By.CSS_SELECTOR, 'tbody tr')
+                table_data = {
+                    'question': f'Question {index+1}',
+                    'results': []
+                }
+                for row in rows:
+                    cells = row.find_elements(By.CSS_SELECTOR, 'td')
+                    if len(cells) >= 5:
+                        step = cells[0].text
+                        time = cells[1].text
+                        action = cells[2].text
+                        state = cells[3].text
+                        marks = cells[4].text
+
+                        table_data['results'].append({
+                            'step': step,
+                            'time': time,
+                            'action': action,
+                            'state': state,
+                            'marks': marks
+                        })
+
+                attempt_data.append(table_data)
+
+            record['response_history'] = attempt_data
+        
         with open(
-            f"data/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
-            "w",
-            encoding='utf-8') as json_file:
-            json.dump(data, json_file)
+                f"data/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
+                "w",
+                encoding='utf-8') as json_file:
+                json.dump(data, json_file)
