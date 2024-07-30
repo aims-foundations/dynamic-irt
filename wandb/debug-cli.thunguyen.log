@@ -1,7 +1,0 @@
-2024-07-30 21:26:01 INFO Running runs: []
-2024-07-30 21:26:01 INFO Agent received command: run
-2024-07-30 21:26:01 INFO Agent starting run with config:
-	class_name: L01
-	course_name: DSA-HK231
-2024-07-30 21:26:01 INFO About to run command: /usr/bin/env python main_crawling.py --class_name=L01 --course_name=DSA-HK231
-2024-07-30 21:26:06 INFO Running runs: ['9zf4op6n']
