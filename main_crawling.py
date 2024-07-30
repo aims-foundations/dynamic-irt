@@ -15,6 +15,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from configs import LOGIN_USER, LOGIN_PASSWD, DATA_LINKS
 from utils import parse_score, check
+import wandb
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-HK231")
@@ -32,9 +33,12 @@ if __name__ == "__main__":
     chrome_options.add_argument("--disable-dev-shm-usage")
     driver = webdriver.Chrome(options=chrome_options)
     wait = WebDriverWait(driver, 20)
-
+    
     course_name = args.course_name
     class_name = args.class_name
+    
+    wandb.init(project="student-score-crawler", config=args)
+
     target_link = DATA_LINKS[course_name][class_name]
     parsed_url = urlparse(target_link)
     # Extract the domain
@@ -69,21 +73,21 @@ if __name__ == "__main__":
     os.makedirs(f"data/{course_name}/{class_name}", exist_ok=True)
 
     # print(driver.current_url)
-
+    all_data = []
     for quiz_link in tqdm(QUIZZES_RESULT_LINKS, desc="Crawling"):
         print(quiz_link)
         driver.get(quiz_link)
         
-        wait.until(EC.visibility_of_element_located((By.ID, 'region-main')))
-        lab_name = driver.title.split(":")[0].strip()
+        # wait.until(EC.presence_of_element_located((By.ID, 'region-main')))
+        # lab_name = driver.title.split(":")[0].strip()
         
         data = {
-            'lab_name': lab_name,
+            'lab_name': driver.title.split(":")[0].strip(),
             'list_questions': [],
             'student_answers': []
         }
         
-        wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'table')))
+        # wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'table')))
         student_rows = driver.find_elements(By.CSS_SELECTOR, 'table tbody tr')
 
         for index, row in enumerate(student_rows):
@@ -113,7 +117,11 @@ if __name__ == "__main__":
             except TimeoutException:
                 print(f"Element with ID {student_link} did not appear in time.")
                 continue
-
+        
+        if data['student_answers'] is None:
+            print(f"There are no students in this quiz link {student_link}.")
+            continue
+        
         driver.get(data['student_answers'][0]['review_link'])
         try:
             questions = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.que.coderunner')))
@@ -176,8 +184,17 @@ if __name__ == "__main__":
 
             record['response_history'] = attempt_data
         
+        all_data.append(data)
+        
         with open(
                 f"data/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
                 "w",
                 encoding='utf-8') as json_file:
                 json.dump(data, json_file)
+
+    metrics = {
+        'total_quiz_links': len(QUIZZES_RESULT_LINKS),
+        'total_students': sum(len(data['student_answers']) for data in all_data)
+    }
+    wandb.log(metrics)
+    driver.quit()
