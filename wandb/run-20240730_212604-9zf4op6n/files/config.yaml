@@ -1,0 +1,32 @@
+wandb_version: 1
+
+_wandb:
+  desc: null
+  value:
+    python_version: 3.11.5
+    cli_version: 0.17.5
+    is_jupyter_run: false
+    is_kaggle_kernel: false
+    start_time: 1722349564
+    t:
+      1:
+      - 55
+      - 105
+      2:
+      - 55
+      - 105
+      3:
+      - 23
+      - 37
+      4: 3.11.5
+      5: 0.17.5
+      8:
+      - 4
+      - 5
+      13: darwin-arm64
+class_name:
+  desc: null
+  value: L01
+course_name:
+  desc: null
+  value: DSA-HK231

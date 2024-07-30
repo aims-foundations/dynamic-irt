@@ -1,0 +1,29 @@
+2024-07-30 21:26:04,971 INFO    MainThread:28624 [wandb_setup.py:_flush():76] Current SDK version is 0.17.5
+2024-07-30 21:26:04,972 INFO    MainThread:28624 [wandb_setup.py:_flush():76] Configure stats pid to 28624
+2024-07-30 21:26:04,972 INFO    MainThread:28624 [wandb_setup.py:_flush():76] Loading settings from /Users/thunguyen/.config/wandb/settings
+2024-07-30 21:26:04,972 INFO    MainThread:28624 [wandb_setup.py:_flush():76] Loading settings from /Users/thunguyen/Downloads/CodeInsights/wandb/settings
+2024-07-30 21:26:04,972 WARNING MainThread:28624 [wandb_setup.py:_flush():76] Unknown environment variable: WANDB_SERVICE
+2024-07-30 21:26:04,972 INFO    MainThread:28624 [wandb_setup.py:_flush():76] Loading settings from environment variables: {'entity': 'hcmut-llm', 'project': 'student-score-crawler', 'sweep_id': 'bcnxxjs5', 'root_dir': '/Users/thunguyen/Downloads/CodeInsights', 'run_id': '9zf4op6n', 'sweep_param_path': '/Users/thunguyen/Downloads/CodeInsights/wandb/sweep-bcnxxjs5/config-9zf4op6n.yaml'}
+2024-07-30 21:26:04,972 INFO    MainThread:28624 [wandb_setup.py:_flush():76] Applying setup settings: {'_disable_service': False}
+2024-07-30 21:26:04,972 INFO    MainThread:28624 [wandb_setup.py:_flush():76] Inferring run settings from compute environment: {'program_relpath': 'main_crawling.py', 'program_abspath': '/Users/thunguyen/Downloads/CodeInsights/main_crawling.py', 'program': '/Users/thunguyen/Downloads/CodeInsights/main_crawling.py'}
+2024-07-30 21:26:04,972 INFO    MainThread:28624 [wandb_setup.py:_flush():76] Applying login settings: {}
+2024-07-30 21:26:04,973 INFO    MainThread:28624 [wandb_init.py:_log_setup():529] Logging user logs to /Users/thunguyen/Downloads/CodeInsights/wandb/run-20240730_212604-9zf4op6n/logs/debug.log
+2024-07-30 21:26:04,973 INFO    MainThread:28624 [wandb_init.py:_log_setup():530] Logging internal logs to /Users/thunguyen/Downloads/CodeInsights/wandb/run-20240730_212604-9zf4op6n/logs/debug-internal.log
+2024-07-30 21:26:04,973 INFO    MainThread:28624 [wandb_init.py:init():569] calling init triggers
+2024-07-30 21:26:04,973 INFO    MainThread:28624 [wandb_init.py:init():576] wandb.init called with sweep_config: {'class_name': 'L01', 'course_name': 'DSA-HK231'}
+config: {}
+2024-07-30 21:26:04,973 INFO    MainThread:28624 [wandb_init.py:init():619] starting backend
+2024-07-30 21:26:04,973 INFO    MainThread:28624 [wandb_init.py:init():623] setting up manager
+2024-07-30 21:26:04,980 INFO    MainThread:28624 [backend.py:_multiprocessing_setup():105] multiprocessing start_methods=spawn,fork,forkserver, using: spawn
+2024-07-30 21:26:04,982 INFO    MainThread:28624 [wandb_init.py:init():631] backend started and connected
+2024-07-30 21:26:04,989 INFO    MainThread:28624 [wandb_run.py:_config_callback():1382] config_cb None None {'class_name': 'L01', 'course_name': 'DSA-HK231'}
+2024-07-30 21:26:04,989 INFO    MainThread:28624 [wandb_init.py:init():720] updated telemetry
+2024-07-30 21:26:05,010 INFO    MainThread:28624 [wandb_init.py:init():753] communicating run to backend with 90.0 second timeout
+2024-07-30 21:26:05,622 INFO    MainThread:28624 [wandb_run.py:_on_init():2435] communicating current version
+2024-07-30 21:26:05,903 INFO    MainThread:28624 [wandb_run.py:_on_init():2444] got version response 
+2024-07-30 21:26:05,903 INFO    MainThread:28624 [wandb_init.py:init():804] starting run threads in backend
+2024-07-30 21:26:12,066 INFO    MainThread:28624 [wandb_run.py:_console_start():2413] atexit reg
+2024-07-30 21:26:12,066 INFO    MainThread:28624 [wandb_run.py:_redirect():2255] redirect: wrap_raw
+2024-07-30 21:26:12,066 INFO    MainThread:28624 [wandb_run.py:_redirect():2320] Wrapping output streams.
+2024-07-30 21:26:12,066 INFO    MainThread:28624 [wandb_run.py:_redirect():2345] Redirects installed.
+2024-07-30 21:26:12,067 INFO    MainThread:28624 [wandb_init.py:init():847] run started, returning control to user process
