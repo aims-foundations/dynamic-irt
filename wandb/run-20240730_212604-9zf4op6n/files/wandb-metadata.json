@@ -1,0 +1,40 @@
+{
+    "os": "macOS-14.5-arm64-arm-64bit",
+    "python": "3.11.5",
+    "heartbeatAt": "2024-07-30T14:26:07.618652",
+    "startedAt": "2024-07-30T14:26:04.965105",
+    "docker": null,
+    "cuda": null,
+    "args": [
+        "--class_name=L01",
+        "--course_name=DSA-HK231"
+    ],
+    "state": "running",
+    "program": "/Users/thunguyen/Downloads/CodeInsights/main_crawling.py",
+    "codePathLocal": "main_crawling.py",
+    "codePath": "main_crawling.py",
+    "git": {
+        "remote": "https://github.com/sangttruong/CodeInsights.git",
+        "commit": "003ebd3b96b01fa0d7004085a9c3e5283ac5300b"
+    },
+    "email": "painkiller.nhat@gmail.com",
+    "root": "/Users/thunguyen/Downloads/CodeInsights",
+    "host": "Thus-MacBook-Air.local",
+    "username": "thunguyen",
+    "executable": "/Users/thunguyen/anaconda3/bin/python",
+    "cpu_count": 8,
+    "cpu_count_logical": 8,
+    "disk": {
+        "/": {
+            "total": 228.27386474609375,
+            "used": 192.69882202148438
+        }
+    },
+    "gpuapple": {
+        "type": "arm",
+        "vendor": "Apple"
+    },
+    "memory": {
+        "total": 16.0
+    }
+}

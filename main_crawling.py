@@ -37,7 +37,7 @@ if __name__ == "__main__":
     course_name = args.course_name
     class_name = args.class_name
     
-    wandb.init(project="student-score-crawler", config=args)
+    wandb.init(project="student-score-crawler")
 
     target_link = DATA_LINKS[course_name][class_name]
     parsed_url = urlparse(target_link)
@@ -197,4 +197,6 @@ if __name__ == "__main__":
         'total_students': sum(len(data['student_answers']) for data in all_data)
     }
     wandb.log(metrics)
+    
+    wandb.finish()
     driver.quit()
