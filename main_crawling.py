@@ -16,6 +16,7 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from configs import LOGIN_USER, LOGIN_PASSWD, DATA_LINKS
 from utils import parse_score, check
 import wandb
+import pathlib
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-HK231")
@@ -57,13 +58,14 @@ if __name__ == "__main__":
     # Get course homepage
     driver.get(target_link)
     xpath_expression = f"//a[starts-with(@href, 'https://{domain}/mod/quiz/view.php?id=')]"
-    try:
-        wait.until(EC.presence_of_element_located((By.XPATH, xpath_expression)))
-        filtered_links = driver.find_elements(By.XPATH, xpath_expression)
-    except NoSuchElementException as e:
-        print("Element not found:", e)
-    except TimeoutException as e:
-        print("Request timed out:", e)
+    filtered_links = driver.find_elements(By.XPATH, xpath_expression)
+    # try:
+    #     wait.until(EC.presence_of_element_located((By.XPATH, xpath_expression)))
+    #     filtered_links = driver.find_elements(By.XPATH, xpath_expression)
+    # except NoSuchElementException as e:
+    #     print("Element not found:", e)
+    # except TimeoutException as e:
+    #     print("Request timed out:", e)
     QUIZZES_RESULT_LINKS = [
         link.get_attribute('href').replace("view.php", "report.php") + "&mode=overview"
         for link in filtered_links
@@ -120,34 +122,34 @@ if __name__ == "__main__":
         
         if data['student_answers'] is None:
             print(f"There are no students in this quiz link {student_link}.")
-            continue
-        
-        driver.get(data['student_answers'][0]['review_link'])
-        try:
-            questions = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.que.coderunner')))
-            list_questions = []
+        else:
+            driver.get(data['student_answers'][0]['review_link'])
+            try:
+                questions = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.que.coderunner')))
+                list_questions = []
 
-            for question in questions:
-                question_text = " ".join(question.find_element(By.CSS_SELECTOR, 'div.content div.formulation').text.split())
-                coderunner_examples_div = question.find_element(By.CSS_SELECTOR, 'div.coderunner-examples')
-                expected_output_table = coderunner_examples_div.find_element(By.CSS_SELECTOR, 'table.coderunnerexamples')
+                for question in questions:
+                    question_text = " ".join(question.find_element(By.CSS_SELECTOR, 'div.content div.formulation').text.split())
+                    # coderunner_examples_div = question.find_element(By.CSS_SELECTOR, 'div.coderunner-examples')
+                    coderunner_examples_div = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div.coderunner-examples')))
+                    expected_output_table = coderunner_examples_div.find_element(By.CSS_SELECTOR, 'table.coderunnerexamples')
 
-                rows = expected_output_table.find_elements(By.CSS_SELECTOR, 'tbody tr')
-                expected_outputs = []
-                for row in rows:
-                    test_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c0 pre.tablecell').text
-                    result_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c1 pre.tablecell').text
-                    expected_outputs.append({'test': test_cell, 'result': result_cell})
+                    rows = expected_output_table.find_elements(By.CSS_SELECTOR, 'tbody tr')
+                    expected_outputs = []
+                    for row in rows:
+                        test_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c0 pre.tablecell').text
+                        result_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c1 pre.tablecell').text
+                        expected_outputs.append({'test': test_cell, 'result': result_cell})
 
-                list_questions.append({
-                    'question': question_text,
-                    'expected_outputs': expected_outputs
-                })
+                    list_questions.append({
+                        'question': question_text,
+                        'expected_outputs': expected_outputs
+                    })
 
-            data['list_questions'] = list_questions
-        except TimeoutException:
-            print(f"Timeout.")
-            continue
+                data['list_questions'] = list_questions
+            except TimeoutException:
+                print(f"Timeout.")
+                continue
 
         for record in data['student_answers']:
             driver.get(record['review_link'])
@@ -186,6 +188,11 @@ if __name__ == "__main__":
         
         all_data.append(data)
         
+        current_path = pathlib.Path().resolve()
+        data_path = f"{current_path}/data"
+        if not os.path.exists(data_path):
+            os.makedirs(data_path)
+
         with open(
                 f"data/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
                 "w",
