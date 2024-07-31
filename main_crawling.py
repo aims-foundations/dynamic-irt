@@ -70,9 +70,12 @@ if __name__ == "__main__":
         link.get_attribute('href').replace("view.php", "report.php") + "&mode=overview"
         for link in filtered_links
     ]
-
+    current_path = pathlib.Path().resolve()
+    data_path = f"{current_path}/data"
+    if not os.path.exists(data_path):
+        os.makedirs(data_path)
     # Create folders
-    os.makedirs(f"data/{course_name}/{class_name}", exist_ok=True)
+    os.makedirs(f"{data_path}/{course_name}/{class_name}", exist_ok=True)
 
     # print(driver.current_url)
     all_data = []
@@ -120,7 +123,7 @@ if __name__ == "__main__":
                 print(f"Element with ID {student_link} did not appear in time.")
                 continue
         
-        if data['student_answers'] is None:
+        if data['student_answers'][0]['review_link'] is None:
             print(f"There are no students in this quiz link {student_link}.")
         else:
             driver.get(data['student_answers'][0]['review_link'])
@@ -187,14 +190,9 @@ if __name__ == "__main__":
             record['response_history'] = attempt_data
         
         all_data.append(data)
-        
-        current_path = pathlib.Path().resolve()
-        data_path = f"{current_path}/data"
-        if not os.path.exists(data_path):
-            os.makedirs(data_path)
 
         with open(
-                f"data/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
+                f"{data_path}/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
                 "w",
                 encoding='utf-8') as json_file:
                 json.dump(data, json_file)
