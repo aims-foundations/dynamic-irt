@@ -4,6 +4,8 @@ Run this file to crawl students' scores.
 import argparse
 import json
 import os
+import re
+import string
 from urllib.parse import urlparse
 from tqdm import tqdm
 from selenium import webdriver
@@ -123,42 +125,43 @@ if __name__ == "__main__":
                 print(f"Element with ID {student_link} did not appear in time.")
                 continue
         
-        if data['student_answers'][0]['review_link'] is None:
-            print(f"There are no students in this quiz link {student_link}.")
-        else:
-            driver.get(data['student_answers'][0]['review_link'])
-            try:
-                questions = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.que.coderunner')))
-                list_questions = []
+        if not data['student_answers']:
+            print(f"There are no students in this quiz link.")
+            continue
+        # else:
+        driver.get(data['student_answers'][0]['review_link'])
+        try:
+            questions = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.que.coderunner')))
+            list_questions = []
 
-                for question in questions:
-                    question_text = " ".join(question.find_element(By.CSS_SELECTOR, 'div.content div.formulation').text.split())
-                    # coderunner_examples_div = question.find_element(By.CSS_SELECTOR, 'div.coderunner-examples')
-                    coderunner_examples_div = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div.coderunner-examples')))
-                    expected_output_table = coderunner_examples_div.find_element(By.CSS_SELECTOR, 'table.coderunnerexamples')
+            for question in questions:
+                question_text = " ".join(question.find_element(By.CSS_SELECTOR, 'div.content div.formulation').text.split())
+                # coderunner_examples_div = question.find_element(By.CSS_SELECTOR, 'div.coderunner-examples')
+                coderunner_examples_div = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div.coderunner-examples')))
+                expected_output_table = coderunner_examples_div.find_element(By.CSS_SELECTOR, 'table.coderunnerexamples')
 
-                    rows = expected_output_table.find_elements(By.CSS_SELECTOR, 'tbody tr')
-                    expected_outputs = []
-                    for row in rows:
-                        test_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c0 pre.tablecell').text
-                        result_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c1 pre.tablecell').text
-                        expected_outputs.append({'test': test_cell, 'result': result_cell})
+                rows = expected_output_table.find_elements(By.CSS_SELECTOR, 'tbody tr')
+                expected_outputs = []
+                for row in rows:
+                    test_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c0 pre.tablecell').text
+                    result_cell = row.find_element(By.CSS_SELECTOR, 'td.cell.c1 pre.tablecell').text
+                    expected_outputs.append({'test': test_cell, 'result': result_cell})
 
-                    list_questions.append({
-                        'question': question_text,
-                        'expected_outputs': expected_outputs
-                    })
+                list_questions.append({
+                    'question': question_text,
+                    'expected_outputs': expected_outputs
+                })
 
-                data['list_questions'] = list_questions
-            except TimeoutException:
-                print(f"Timeout.")
-                continue
+            data['list_questions'] = list_questions
+        except TimeoutException:
+            print(f"Timeout.")
+            continue
 
         for record in data['student_answers']:
             driver.get(record['review_link'])
             attempt_data = []
 
-            wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'responsehistoryheader')))
+            # wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'responsehistoryheader')))
             history_headers = driver.find_elements(By.XPATH, "//h4[contains(text(), 'Response history')]")
 
             for index, header in enumerate(history_headers):
@@ -191,8 +194,10 @@ if __name__ == "__main__":
         
         all_data.append(data)
 
+        first_part = driver.title.split(':')[0]
+        filename = re.sub(f"[{string.punctuation}]", "_", first_part) + ".json"
         with open(
-                f"{data_path}/{course_name}/{class_name}/{driver.title.replace(' ', '_').split(':')[0]}.json",
+                f"{data_path}/{course_name}/{class_name}/{filename}",
                 "w",
                 encoding='utf-8') as json_file:
                 json.dump(data, json_file)

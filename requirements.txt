@@ -1,3 +1,5 @@
 selenium
 matplotlib
 tqdm
+webdriver-manager
+wandb
