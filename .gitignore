@@ -5,3 +5,4 @@ __pycache__/
 test.py
 wandb/
 .DS_Store
+myenv/
