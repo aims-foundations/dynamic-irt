@@ -1,6 +1,7 @@
 """
 This file saves all variables.
 """
+
 LOGIN_USER = "010344"
 LOGIN_PASSWD = "010344"
 
@@ -58,5 +59,5 @@ DATA_LINKS = {
     },
     "PF-HK222": {
         "ALL": "https://e-learning.hcmut.edu.vn/course/view.php?id=94316",
-    }
+    },
 }
