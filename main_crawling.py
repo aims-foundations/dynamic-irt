@@ -25,6 +25,12 @@ parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-H
 parser.add_argument("--class_name", help="Class Name", type=str, default="L09")
 args = parser.parse_args()
 
+<<<<<<< HEAD
+=======
+
+# def process(driver, quiz_link):
+    
+>>>>>>> 0ccbe13154f1a1b05bbd118858d1ccaf04486436
 if __name__ == "__main__":
     # Chrome setup
     chrome_options = Options()
@@ -74,13 +80,13 @@ if __name__ == "__main__":
     for quiz_link in tqdm(QUIZZES_RESULT_LINKS, desc="Crawling"):
         print(quiz_link)
         driver.get(quiz_link)
-        
+
         data = {
             'lab_name': driver.title.split(":")[0].strip(),
             'list_questions': [],
             'student_answers': []
         }
-        
+
         student_rows = driver.find_elements(By.CSS_SELECTOR, 'table tbody tr')
 
         for index, row in enumerate(student_rows):
@@ -114,6 +120,7 @@ if __name__ == "__main__":
         if not data['student_answers']:
             print(f"There are no students in this quiz link.")
             continue
+
         driver.get(data['student_answers'][0]['review_link'])
         try:
             questions = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.que.coderunner')))
@@ -121,6 +128,7 @@ if __name__ == "__main__":
 
             for question in questions:
                 question_text = " ".join(question.find_element(By.CSS_SELECTOR, 'div.content div.formulation').text.split())
+
                 coderunner_examples_div = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div.coderunner-examples')))
                 expected_output_table = coderunner_examples_div.find_element(By.CSS_SELECTOR, 'table.coderunnerexamples')
 
