@@ -25,9 +25,6 @@ parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-H
 parser.add_argument("--class_name", help="Class Name", type=str, default="L09")
 args = parser.parse_args()
 
-
-# def process(driver, quiz_link):
-    
 if __name__ == "__main__":
     # Chrome setup
     chrome_options = Options()
@@ -61,13 +58,6 @@ if __name__ == "__main__":
     driver.get(target_link)
     xpath_expression = f"//a[starts-with(@href, 'https://{domain}/mod/quiz/view.php?id=')]"
     filtered_links = driver.find_elements(By.XPATH, xpath_expression)
-    # try:
-    #     wait.until(EC.presence_of_element_located((By.XPATH, xpath_expression)))
-    #     filtered_links = driver.find_elements(By.XPATH, xpath_expression)
-    # except NoSuchElementException as e:
-    #     print("Element not found:", e)
-    # except TimeoutException as e:
-    #     print("Request timed out:", e)
     QUIZZES_RESULT_LINKS = [
         link.get_attribute('href').replace("view.php", "report.php") + "&mode=overview"
         for link in filtered_links
@@ -85,22 +75,18 @@ if __name__ == "__main__":
         print(quiz_link)
         driver.get(quiz_link)
         
-        # wait.until(EC.presence_of_element_located((By.ID, 'region-main')))
-        # lab_name = driver.title.split(":")[0].strip()
-        
         data = {
             'lab_name': driver.title.split(":")[0].strip(),
             'list_questions': [],
             'student_answers': []
         }
         
-        # wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'table')))
         student_rows = driver.find_elements(By.CSS_SELECTOR, 'table tbody tr')
 
         for index, row in enumerate(student_rows):
             if 'emptyrow' in row.get_attribute('class'):
                 print("Skipping empty row.")
-                continue  # Skip this row and move to the next one
+                continue
 
             try:
                 student_link = f'mod-quiz-report-overview-report_r{index}_c2'
@@ -128,7 +114,6 @@ if __name__ == "__main__":
         if not data['student_answers']:
             print(f"There are no students in this quiz link.")
             continue
-        # else:
         driver.get(data['student_answers'][0]['review_link'])
         try:
             questions = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.que.coderunner')))
@@ -136,7 +121,6 @@ if __name__ == "__main__":
 
             for question in questions:
                 question_text = " ".join(question.find_element(By.CSS_SELECTOR, 'div.content div.formulation').text.split())
-                # coderunner_examples_div = question.find_element(By.CSS_SELECTOR, 'div.coderunner-examples')
                 coderunner_examples_div = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div.coderunner-examples')))
                 expected_output_table = coderunner_examples_div.find_element(By.CSS_SELECTOR, 'table.coderunnerexamples')
 
@@ -161,7 +145,6 @@ if __name__ == "__main__":
             driver.get(record['review_link'])
             attempt_data = []
 
-            # wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'responsehistoryheader')))
             history_headers = driver.find_elements(By.XPATH, "//h4[contains(text(), 'Response history')]")
 
             for index, header in enumerate(history_headers):
