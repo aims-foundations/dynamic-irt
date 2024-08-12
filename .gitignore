@@ -3,4 +3,6 @@ plots/
 .ipynb_checkpoints/
 __pycache__/
 test.py
+wandb/
 .DS_Store
+myenv/

@@ -1,14 +1,19 @@
 """
 Run this file to get students' score analysis.
 """
+
 import os
 import json
 import argparse
 from utils import (
-    process_scores_per_question, plot_scores_per_question,
-    process_scores_all_questions, plot_scores_all_questions,
-    process_scores_per_week, plot_scores_per_week,
+    process_scores_per_question,
+    plot_scores_per_question,
+    process_scores_all_questions,
+    plot_scores_all_questions,
+    process_scores_per_week,
+    plot_scores_per_week,
 )
+
 
 def plot_per_question(course_question, class_question):
     """
@@ -20,10 +25,11 @@ def plot_per_question(course_question, class_question):
     for json_file in os.listdir(directory):
         if json_file.endswith(".json"):
             file_path = os.path.join(directory, json_file)
-            with open(file_path, "r", encoding='utf-8') as file:
+            with open(file_path, "r", encoding="utf-8") as file:
                 data.append(json.load(file))
     processed_data = process_scores_per_question(data)
     plot_scores_per_question(namepath, processed_data)
+
 
 def plot_all_questions(course_all_questions, class_all_questions):
     """
@@ -34,7 +40,7 @@ def plot_all_questions(course_all_questions, class_all_questions):
     for json_file in os.listdir(f"data/{namepath}"):
         if json_file.endswith(".json"):
             file_path = os.path.join(f"data/{namepath}", json_file)
-            with open(file_path, "r", encoding='utf-8') as file:
+            with open(file_path, "r", encoding="utf-8") as file:
                 data = json.load(file)
                 all_data.append((json_file, data))
     global_max = max(
@@ -45,6 +51,7 @@ def plot_all_questions(course_all_questions, class_all_questions):
     processed_records = process_scores_all_questions(all_data, global_max)
     plot_scores_all_questions(namepath, processed_records, global_max)
 
+
 def plot_weeks(weeks, course_weeks, class_weeks):
     """
     This function plots student grades in weeks.
@@ -53,21 +60,27 @@ def plot_weeks(weeks, course_weeks, class_weeks):
     student_ids = set()
     for week in weeks:
         for exercise in week:
-            with open(os.path.join(f"data/{namepath}", exercise),
-                    "r", encoding='utf-8') as file:
+            with open(
+                os.path.join(f"data/{namepath}", exercise), "r", encoding="utf-8"
+            ) as file:
                 data = json.load(file)
             student_ids.update(attempt["id"] for attempt in data["attempts"])
     students = process_scores_per_week(weeks, student_ids, namepath)
-    weekly_averages = {student_id: [sum(week) / len(week) for week in weeks_scores]
-        for student_id, weeks_scores in students.items()}
+    weekly_averages = {
+        student_id: [sum(week) / len(week) for week in weeks_scores]
+        for student_id, weeks_scores in students.items()
+    }
     plot_scores_per_week(weekly_averages, len(weeks[0]))
+
 
 def main():
     """
     Main function
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-HK231")
+    parser.add_argument(
+        "--course_name", help="Class Name", type=str, default="DSA-HK231"
+    )
     parser.add_argument("--class_name", help="Class Name", type=str, default="L09")
     args = parser.parse_args()
     course_name = args.course_name
@@ -106,6 +119,6 @@ def main():
 
     plot_weeks(weeks_file_list, course_name, class_name)
 
+
 if __name__ == "__main__":
     main()
-    
