@@ -4,30 +4,22 @@ import random
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
+from datasets import load_dataset
 
-def select_specific_file(directory, class_name='CC02', lab_name='LAB2'):
-    target_path = os.path.join(directory, class_name, f"{lab_name}.json")
-    if os.path.exists(target_path):
-        return target_path
-    else:
-        return None
+def load_data_from_huggingface(dataset_name, file_path):
+    dataset_question = load_dataset(dataset_name, data_files=file_path, field='list_questions')
+    dataset_student = load_dataset(dataset_name, data_files=file_path, field='student_answers')
+    return dataset_question, dataset_student
 
-def extract_data_from_file(file_path):
-    with open(file_path, 'r') as file:
-        data = json.load(file)
-        questions = data['list_questions']
-        if not questions:
-            return None, None
-        question_index = random.randint(0, len(questions) - 1)
-        question_label = questions[question_index]['question']
+def extract_data(dataset_questions, dataset_students):
+    question_index = random.randint(0, len(dataset_questions['train']) - 1)
 
     student_data = {}
-    for student in data['student_answers']:
-        for response in student['response_history']:
+    for student_answers in dataset_students['train']:
+        for response in student_answers['response_history']:
             if response['question'] == f'Question {question_index + 1}':
                 attempts = [(i+1, result['state'] == 'Correct') for i, result in enumerate(response['results'])]
-                student_data[student['name']] = attempts
-
+                student_data[student_answers['name']] = attempts
     return student_data
 
 def plot(student_data):
@@ -72,14 +64,15 @@ def plot(student_data):
     print("Plot saved as 'image.png'")
 
 
-directory_path = "dsa-records"
+dataset_name = "stair-lab/dsa-records"
+file_path = {"train": "CC02/LAB4.json"}
 
-specific_file = select_specific_file(directory_path)
-if specific_file:
-    student_data = extract_data_from_file(specific_file)
+dataset_questions, dataset_students = load_data_from_huggingface(dataset_name, file_path)
+if dataset_questions and dataset_students:
+    student_data = extract_data(dataset_questions, dataset_students)
     if student_data:
         plot(student_data)
     else:
         print("No student data found for the question.")
 else:
-    print("No specific file found in the directory for the given class and lab name.")
+    print("Failed to load dataset.")
