@@ -1,4 +1,9 @@
 import json
+import os
+from datasets import load_dataset
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlsplit, unquote
 
 def parse_score(name):
     return float(name.split('\n')[1][1:])
@@ -28,9 +33,8 @@ def find_global_max(dirpath):
                     if answer['question'] == f"Question {q_index}":
                         mark_per_attempt = []
                         for score_idx in range(len(answer['results'])):
-                            mark_per_attempt.append(answer['results'][score_idx]['marks'])
-
-                        mark_per_attempt = ['0' if mark == '' else mark for mark in mark_per_attempt]
+                            if answer['results'][score_idx]['marks'] != "":
+                                mark_per_attempt.append(answer['results'][score_idx]['marks'])
 
                     marks.append(mark_per_attempt)
                 records.extend(marks)

@@ -4,38 +4,52 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 from utils import find_global_max
+from datasets import load_dataset
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlsplit, unquote
 
-def plot_per_question(dirpath):
-    for data_file in os.listdir(dirpath):
-        if data_file == ".ipynb_checkpoints":
-            continue
+def plot_per_question(repo_id, course_name, class_name):
+    url = f"https://huggingface.co/datasets/{repo_id}/tree/main/{class_name}/"
+    response = requests.get(url)
+    json_files = []
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, 'html.parser')
+        links = soup.find_all('a')
         
-        data_file = os.path.join(dirpath, data_file)
-        with open(data_file, "r") as f:
-            data = json.load(f)
+        for link in links:
+            href = link.get('href')
+            if href.endswith('.json'):
+                path = urlsplit(href).path
+                filename = path.split('/')[-1]
+                filename = unquote(filename)
+                json_files.append(filename)
+    else:
+        print("Failed to retrieve data:", response.status_code)
 
-        parts = dirpath.split('/')
-
+    for json_file in json_files:
+        data_q = load_dataset(repo_id, data_files=f"{class_name}/{json_file}", field='list_questions')
+        data_s = load_dataset(repo_id, data_files=f"{class_name}/{json_file}", field='student_answers')
+        
         ids = []
-        for answers in data['student_answers']:
+        for answers in data_s['train']:
             ids.append(answers['id'])
 
-        for idx in range(len(data['list_questions'])):
+        for idx in range(len(data_q['train'])):
             plt.clf()
     
-            max_score = data['list_questions'][idx]['max_scores']
+            max_score = data_q['train'][idx]['max_scores']
             q_index = idx + 1
 
             records = []
-            for answers in data['student_answers']:
+            for answers in data_s['train']:
                 for answer in answers['response_history']:
                     marks = []
                     if answer['question'] == f"Question {q_index}":
                         mark_per_attempt = []
                         for score_idx in range(len(answer['results'])):
-                            mark_per_attempt.append(answer['results'][score_idx]['marks'])
-
-                        mark_per_attempt = ['0' if mark == '' else mark for mark in mark_per_attempt]
+                            if answer['results'][score_idx]['marks'] != "":
+                                mark_per_attempt.append(answer['results'][score_idx]['marks'])
 
                     marks.append(mark_per_attempt)
                 records.extend(marks)
@@ -49,7 +63,6 @@ def plot_per_question(dirpath):
 
             max_attempts = max(len(student_marks) for student_marks in records)
             
-            # Generate x values (attempts)
             x = list(range(1, max_attempts + 1))
     
             # Find the average score for each number of attemps
@@ -60,31 +73,30 @@ def plot_per_question(dirpath):
                     padded_records.append(student_marks + [max(student_marks)] * (max_attempts - len(student_marks)))
                 else:
                     padded_records.append([0] * max_attempts)
-            # Convert the list of lists to a NumPy array
+
             padded_records = np.array(padded_records)
-            # Calculate the average marks for each attempt number across all students
             average_marks = np.nanmean(padded_records, axis=0)
     
-            # Plot each student's attempts
             for i, student_marks in enumerate(padded_records):
                 plt.plot(x, student_marks, label=f"{ids[i]}", color='blue', alpha=0.3)
     
-            # Plot the average marks as a bold line
             plt.plot(x, average_marks, label='Average Marks', linewidth=3, color='red')
 
+            lab_name = json_file.split('.')[0]
             # Add labels and legend
             plt.xlabel('Attempts')
             plt.ylabel('Marks')
-            plt.title(f"{data['lab_name']} - Q{q_index}")
-            plt.savefig(f"plots/{parts[1]}/{parts[2]}/{data['lab_name']}-Q{q_index}.png")
+            plt.title(f"{lab_name} - Q{q_index}")
+            plt.savefig(f"plots/{course_name}/{class_name}/{lab_name}-Q{q_index}.png")
 
 
 def plot_all_questions(dirpath):
     plt.clf()
 
     all_padded_records = []
-    x = None
     global_max = find_global_max(dirpath)
+
+    x = list(range(1, global_max + 1))
     
     for data_file in os.listdir(dirpath):
         if data_file == ".ipynb_checkpoints":
@@ -113,9 +125,8 @@ def plot_all_questions(dirpath):
                     if answer['question'] == f"Question {q_index}":
                         mark_per_attempt = []
                         for score_idx in range(len(answer['results'])):
-                            mark_per_attempt.append(answer['results'][score_idx]['marks'])
-
-                        mark_per_attempt = ['0' if mark == '' else mark for mark in mark_per_attempt]
+                            if answer['results'][score_idx]['marks'] != "":
+                                mark_per_attempt.append(answer['results'][score_idx]['marks'])
 
                     marks.append(mark_per_attempt)
                 records.extend(marks)
@@ -125,9 +136,6 @@ def plot_all_questions(dirpath):
             except:
                 continue
             print(f"PLOT {idx}")
-
-            # Generate x values (attempts)
-            x = list(range(1, global_max + 1))
 
             padded_records = []
             for student_marks in records:
@@ -148,8 +156,6 @@ def plot_all_questions(dirpath):
     all_average_marks = np.nanmean(all_padded_records, axis=0)
 
     plt.plot(x, all_average_marks, label='All Average Marks', linewidth=3, color='Red')
-    
-    # Add labels and legend
     plt.xlabel('Attempts')
     plt.ylabel('Marks')
     plt.title(f'All questions')
@@ -165,16 +171,16 @@ def main():
     args = parser.parse_args()
     course_name = args.course_name
     class_name = args.class_name
+
+    repo_id = "stair-lab/dsa_records"
+    
     os.makedirs("plots", exist_ok=True)
     os.makedirs(f"plots/{course_name}", exist_ok=True)
     os.makedirs(f"plots/{course_name}/{class_name}", exist_ok=True)
 
-    wandb.init(project="student-score-crawler")
-
-    plot_per_question(f"data/{course_name}/{class_name}")
+    
+    plot_per_question(repo_id, course_name, class_name)
     plot_all_questions(f"data/{course_name}/{class_name}")
-
-    wandb.finish()
 
 
 if __name__ == "__main__":
