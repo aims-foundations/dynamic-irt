@@ -19,6 +19,7 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from configs import LOGIN_USER, LOGIN_PASSWD, DATA_LINKS
 import wandb
 import pathlib
+from utils import parse_score
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--course_name", help="Class Name", type=str, default="DSA-HK231")
@@ -71,7 +72,7 @@ if __name__ == "__main__":
     # Create folders
     os.makedirs(f"{data_path}/{course_name}/{class_name}", exist_ok=True)
 
-    # print(driver.current_url)
+    # print(QUIZZES_RESULT_LINKS)
     all_data = []
     for quiz_link in tqdm(QUIZZES_RESULT_LINKS, desc="Crawling"):
         print(quiz_link)
@@ -82,6 +83,25 @@ if __name__ == "__main__":
             "list_questions": [],
             "student_answers": [],
         }
+
+        input_field = driver.find_elements(By.ID, "id_pagesize")
+        input_field[0].clear()
+    
+        # Set the new value to '100'
+        input_field[0].send_keys("100")
+    
+        # Simulate pressing the Enter key
+        input_field[0].send_keys(Keys.ENTER)
+    
+        table = driver.find_elements(By.CSS_SELECTOR, 'table.generaltable')
+        if len(table) > 0:
+            headers = table[0].find_elements(By.TAG_NAME, 'th')
+        else:
+            continue
+    
+        column_names = [header.text for header in headers[9:]]
+        max_scores = [parse_score(column_name) for column_name in column_names]
+        print(max_scores)
 
         student_rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
 
@@ -134,7 +154,7 @@ if __name__ == "__main__":
             )
             list_questions = []
 
-            for question in questions:
+            for q_idx, question in enumerate(questions):
                 question_text = " ".join(
                     question.find_element(
                         By.CSS_SELECTOR, "div.content div.formulation"
@@ -162,7 +182,7 @@ if __name__ == "__main__":
                     expected_outputs.append({"test": test_cell, "result": result_cell})
 
                 list_questions.append(
-                    {"question": question_text, "expected_outputs": expected_outputs}
+                    {"question": question_text, "expected_outputs": expected_outputs, "max_scores": max_scores[q_idx]}
                 )
 
             data["list_questions"] = list_questions
