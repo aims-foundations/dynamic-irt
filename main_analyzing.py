@@ -170,7 +170,7 @@ def plot_all_questions(repo_id, course_name, class_name):
     plt.xlabel('Attempts')
     plt.ylabel('Marks')
     plt.title(f'All questions')
-    plt.savefig(f'plots/{parts[1]}/{parts[2]}/all-questions.png')
+    plt.savefig(f'plots/{course_name}/{class_name}/all-questions.png')
 
 
 def main():
