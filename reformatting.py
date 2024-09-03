@@ -4,12 +4,11 @@ import numpy as np
 import pandas as pd
 
 def find_total_student(directory):
-    student_set = set()  # Using a set to automatically handle unique student IDs
+    student_set = set()
 
-    # Walk through the directory structure
     for root, dirs, files in os.walk(directory):
         for file in files:
-            if file.endswith('.json'):  # Check if the file is a JSON file
+            if file.endswith('.json'):
                 file_path = os.path.join(root, file)
                 try:
                     with open(file_path, 'r') as json_file:
@@ -24,11 +23,10 @@ def find_total_student(directory):
 
     return len(student_set)
 
-def load_and_process_data(directory):
+def format_dataset(directory):
     question_attempts = {}
     student_id_to_index = {}
 
-    # Process each JSON file in the directory
     for root, dirs, files in os.walk(directory):
         for file in files:
             if file.endswith('.json'):
@@ -48,15 +46,13 @@ def load_and_process_data(directory):
                 except json.JSONDecodeError as e:
                     print(f"Error decoding JSON from file: {file_path}: {e}")
 
-    # Create indices for questions and students
     question_index = {qid: idx for idx, qid in enumerate(sorted(question_attempts.keys()))}
     N = len(student_id_to_index)
     Q = len(question_index)
-    T = max(question_attempts.values(), default=0)  # Safe default for max
+    T = max(question_attempts.values(), default=0)
     correctness = np.full((N, Q, T), np.nan)
     # print(N, Q, T)
 
-    # Reprocess files to fill the correctness array
     for root, dirs, files in os.walk(directory):
         for file in files:
             if file.endswith('.json'):
@@ -65,7 +61,6 @@ def load_and_process_data(directory):
                 try:
                     with open(file_path, 'r') as json_file:
                         data = json.load(json_file)
-                        # print(folder_name, data['lab_name'])
                         for student in data.get('student_answers', []):
                             student_id = student.get('id')
                             if student_id and student_id in student_id_to_index:
@@ -77,19 +72,12 @@ def load_and_process_data(directory):
                                         for t, result in enumerate(response.get('results', [])):
                                             score = float(result.get('marks', 0)) if result.get('state') == 'Correct' else 0
                                             correctness[s_idx, q_idx, t] = score
-                                            # print(f"Set correctness[{s_idx}, {q_idx}, {t}] = {score}")
                 except json.JSONDecodeError as e:
                     print(f"Error decoding JSON from file: {file_path}: {e}")
 
     return correctness
 
-# Usage
-directory = 'dsa_records'
-data_array = load_and_process_data(directory)
-print(data_array)
-nan_mask = np.isnan(data_array)
-nan_indices = np.where(nan_mask)
-
-print("Indices of NaN values:", nan_indices)
-nan_count = np.sum(nan_mask)
-print("Total number of NaN values:", nan_count)
+if __name__ == "__main__":
+    directory = 'dsa_records'
+    data_array = format_dataset(directory)
+    print(data_array)
