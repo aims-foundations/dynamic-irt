@@ -4,30 +4,48 @@ from datasets import load_dataset
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlsplit, unquote
+from datasets import load_dataset
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlsplit, unquote
 
 def parse_score(name):
     return float(name.split('\n')[1][1:])
 
-def find_global_max(dirpath):
+def find_global_max(repo_id, course_name, class_name):
     global_max = 0
-    for data_file in os.listdir(dirpath):
-        if data_file == ".ipynb_checkpoints":
-            continue
+
+    url = f"https://huggingface.co/datasets/{repo_id}/tree/main/{class_name}/"
+    response = requests.get(url)
+    json_files = []
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, 'html.parser')
+        links = soup.find_all('a')
+        
+        for link in links:
+            href = link.get('href')
+            if href.endswith('.json'):
+                path = urlsplit(href).path
+                filename = path.split('/')[-1]
+                filename = unquote(filename)
+                json_files.append(filename)
+    else:
+        print("Failed to retrieve data:", response.status_code)
     
-        data_file = os.path.join(dirpath, data_file)
-        with open(data_file, "r") as f:
-            data = json.load(f)
+    for json_file in json_files:
+        data_q = load_dataset(repo_id, data_files=f"{class_name}/{json_file}", field='list_questions')
+        data_s = load_dataset(repo_id, data_files=f"{class_name}/{json_file}", field='student_answers')
     
         ids = []
-        for answers in data['student_answers']:
+        for answers in data_s['train']:
             ids.append(answers['id'])
 
-        for idx in range(len(data['list_questions'])):
-            max_score = data['list_questions'][idx]['max_scores']
+        for idx in range(len(data_q['train'])):
+            max_score = data_q['train'][idx]['max_scores']
             q_index = idx + 1
 
             records = []
-            for answers in data['student_answers']:
+            for answers in data_s['train']:
                 for answer in answers['response_history']:
                     marks = []
                     if answer['question'] == f"Question {q_index}":

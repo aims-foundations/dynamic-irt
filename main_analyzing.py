@@ -90,36 +90,47 @@ def plot_per_question(repo_id, course_name, class_name):
             plt.savefig(f"plots/{course_name}/{class_name}/{lab_name}-Q{q_index}.png")
 
 
-def plot_all_questions(dirpath):
+def plot_all_questions(repo_id, course_name, class_name):
     plt.clf()
 
     all_padded_records = []
-    global_max = find_global_max(dirpath)
+    global_max = find_global_max(repo_id, course_name, class_name)
 
     x = list(range(1, global_max + 1))
     
-    for data_file in os.listdir(dirpath):
-        if data_file == ".ipynb_checkpoints":
-            continue
+    url = f"https://huggingface.co/datasets/{repo_id}/tree/main/{class_name}/"
+    response = requests.get(url)
+    json_files = []
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, 'html.parser')
+        links = soup.find_all('a')
         
-        data_file = os.path.join(dirpath, data_file)
-        with open(data_file, "r") as f:
-            data = json.load(f)
+        for link in links:
+            href = link.get('href')
+            if href.endswith('.json'):
+                path = urlsplit(href).path
+                filename = path.split('/')[-1]
+                filename = unquote(filename)
+                json_files.append(filename)
+    else:
+        print("Failed to retrieve data:", response.status_code)
     
-        parts = dirpath.split('/')
-
+    for json_file in json_files:
+        data_q = load_dataset(repo_id, data_files=f"{class_name}/{json_file}", field='list_questions')
+        data_s = load_dataset(repo_id, data_files=f"{class_name}/{json_file}", field='student_answers')
+        
         ids = []
-        for answers in data['student_answers']:
+        for answers in data_s['train']:
             ids.append(answers['id'])
 
-        for idx in range(len(data['list_questions'])):
+        for idx in range(len(data_q['train'])):
             plt.clf()
     
-            max_score = data['list_questions'][idx]['max_scores']
+            max_score = data_q['train'][idx]['max_scores']
             q_index = idx + 1
 
             records = []
-            for answers in data['student_answers']:
+            for answers in data_s['train']:
                 for answer in answers['response_history']:
                     marks = []
                     if answer['question'] == f"Question {q_index}":
@@ -179,8 +190,8 @@ def main():
     os.makedirs(f"plots/{course_name}/{class_name}", exist_ok=True)
 
     
-    plot_per_question(repo_id, course_name, class_name)
-    plot_all_questions(f"data/{course_name}/{class_name}")
+    # plot_per_question(repo_id, course_name, class_name)
+    plot_all_questions(repo_id, course_name, class_name)
 
 
 if __name__ == "__main__":
