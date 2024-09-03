@@ -5,20 +5,21 @@ Run this file to crawl students' scores.
 import argparse
 import json
 import os
+import pathlib
 import re
 import string
 from urllib.parse import urlparse
-from tqdm import tqdm
+
+import wandb
+from configs import DATA_LINKS, LOGIN_PASSWD, LOGIN_USER
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
-from configs import LOGIN_USER, LOGIN_PASSWD, DATA_LINKS
-import wandb
-import pathlib
+from selenium.webdriver.support.ui import WebDriverWait
+from tqdm import tqdm
 from utils import parse_score
 
 parser = argparse.ArgumentParser()
@@ -86,19 +87,19 @@ if __name__ == "__main__":
 
         input_field = driver.find_elements(By.ID, "id_pagesize")
         input_field[0].clear()
-    
+
         # Set the new value to '100'
         input_field[0].send_keys("100")
-    
+
         # Simulate pressing the Enter key
         input_field[0].send_keys(Keys.ENTER)
-    
-        table = driver.find_elements(By.CSS_SELECTOR, 'table.generaltable')
+
+        table = driver.find_elements(By.CSS_SELECTOR, "table.generaltable")
         if len(table) > 0:
-            headers = table[0].find_elements(By.TAG_NAME, 'th')
+            headers = table[0].find_elements(By.TAG_NAME, "th")
         else:
             continue
-    
+
         column_names = [header.text for header in headers[9:]]
         max_scores = [parse_score(column_name) for column_name in column_names]
         print(max_scores)
@@ -182,7 +183,11 @@ if __name__ == "__main__":
                     expected_outputs.append({"test": test_cell, "result": result_cell})
 
                 list_questions.append(
-                    {"question": question_text, "expected_outputs": expected_outputs, "max_scores": max_scores[q_idx]}
+                    {
+                        "question": question_text,
+                        "expected_outputs": expected_outputs,
+                        "max_scores": max_scores[q_idx],
+                    }
                 )
 
             data["list_questions"] = list_questions
