@@ -124,8 +124,6 @@ def plot_all_questions(repo_id, course_name, class_name):
             ids.append(answers['id'])
 
         for idx in range(len(data_q['train'])):
-            plt.clf()
-    
             max_score = data_q['train'][idx]['max_scores']
             q_index = idx + 1
 
