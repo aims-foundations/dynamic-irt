@@ -2,13 +2,14 @@ import os
 import json
 import numpy as np
 import pandas as pd
-from datasets import load_dataset
+from datasets import load_dataset, config
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlsplit, unquote
 import shutil
-from datasets import config
+import Levenshtein
 import pickle
+from huggingface_hub import HfApi
 
 def find_json_files(repo_id):
     directories = []
@@ -46,54 +47,109 @@ def find_json_files(repo_id):
 
     return directory_json_files
 
-# def find_total_student(repo_id, directory_json_files):
-#     student_set = set()
+def preprocess_question(question):
+    answer_phrase = "Answer:(penalty regime:"
+    question_phrase = "Question text "
+    if question_phrase in question:
+        question = question.replace(question_phrase, '').strip()
+    
+    if answer_phrase in question:
+        question = question.split(answer_phrase)[0].strip()
+    
+    return question
 
-#     for directory, files in directory_json_files.items():
-#         for file in files:
-#             data_s = load_dataset(repo_id, data_files=f"{directory}/{file}", field='student_answers')
-            
-#             student_set.update([answer['id'] for answer in data_s['train'] if 'id' in answer])
+def tokenize(text):
+    tokens = text.split()
+    return ' '.join(tokens[:150])
 
-#     return len(student_set)
+def edit_distance(s1, s2):
+    if not s1 or not s2:
+        return 0
+    distance = Levenshtein.distance(s1, s2)
+    
+    max_len = max(len(s1), len(s2))
+    similarity = 1 - (distance / max_len)
+    return similarity
 
-def format_dataset(repo_id, directory_json_files):
-    question_attempts = {}
+def filter_unique_questions(questions, threshold=0.8):
+    if not questions:
+        return []
+    
+    filtered_questions = [tokenize(questions.pop(0))]
+
+    while questions:
+        current_question = tokenize(questions.pop(0))
+        is_unique = True
+
+        for accepted_question in filtered_questions:
+            if edit_distance(current_question, accepted_question) > threshold:
+                is_unique = False
+                break
+
+        if is_unique:
+            filtered_questions.append(current_question)
+
+    return filtered_questions
+
+def format_dataset(repo_id, directory_json_files, threshold=0.8):
+    question_attempts = []
     student_id_to_index = {}
     correctness = []
+    all_questions = []
 
     for directory, files in directory_json_files.items():
         for file in files:
+            data_q = load_dataset(repo_id, data_files=f"{directory}/{file}", field='list_questions')
+
+            for q in data_q['train']:
+                processed_question = preprocess_question(q['question'])
+                all_questions.append(processed_question)
+            
+            
             data_s = load_dataset(repo_id, data_files=f"{directory}/{file}", field='student_answers')
             base_name, _ = os.path.splitext(file)
+            
             for answer in data_s['train']:
                 student_id = answer['id']
                 if student_id not in student_id_to_index:
                     student_id_to_index[student_id] = len(student_id_to_index)
-                process_answer(answer, base_name, directory, question_attempts, student_id_to_index, correctness)
 
-    question_index = {qid: idx for idx, qid in enumerate(sorted(question_attempts.keys()))}
+                for response in answer['response_history']:
+                    num_attempts = len(response['results'])
+                    question_attempts.append(num_attempts)
+
+    unique_questions = list(set(all_questions))
+    unique_questions_by_distance = filter_unique_questions(unique_questions)
+    question_index = {qid: idx for idx, qid in enumerate(unique_questions_by_distance)}
+    
     N = len(student_id_to_index)
-    Q = len(question_index)
-    T = max(question_attempts.values(), default=0)
+    Q = len(unique_questions_by_distance)
+    T = max(question_attempts, default=0)
     correctness_matrix = np.full((N, Q, T), np.nan)
+    print(Q)
 
-    for entry in correctness:
-        correctness_matrix[entry['s_idx'], entry['q_idx'], entry['t']] = entry['score']
+    for directory, files in directory_json_files.items():
+        for file in files:
+            data_q = load_dataset(repo_id, data_files=f"{directory}/{file}", field='list_questions')
+            data_s = load_dataset(repo_id, data_files=f"{directory}/{file}", field='student_answers')
+
+            question_content_map = {f'Question {idx + 1}': q['question'] for idx, q in enumerate(data_q['train'])}
+            for answer in data_s['train']:
+                s_idx = student_id_to_index[answer['id']]
+                for response in answer['response_history']:
+                    current_question = question_content_map.get(response['question'], "")
+                                
+                    q_idx = None
+                    for q_unique in unique_questions_by_distance:
+                        if edit_distance(tokenize(current_question), q_unique) > threshold:
+                            q_idx = question_index.get(q_unique)
+                            break
+                    if q_idx is not None:
+                        for t, result in enumerate(response['results']):
+                            score = float(result['marks']) if result['marks'] != "" else float(-1)
+                            correctness_matrix[s_idx, q_idx, t] = score
 
     return correctness_matrix
-
-def process_answer(answer, base_name, directory, question_attempts, student_id_to_index, correctness):
-    for response in answer['response_history']:
-        question_id = f"{directory}_{base_name}_{response['question'].split()[-1]}"
-        num_attempts = len(response['results'])
-        question_attempts[question_id] = max(question_attempts.get(question_id, 0), num_attempts)
-        s_idx = student_id_to_index[answer['id']]
-        q_idx = question_attempts[question_id]
-
-        for t, result in enumerate(response['results']):
-            score = float(result['marks']) if result['marks'] != "" else float(-1)
-            correctness.append({'s_idx': s_idx, 'q_idx': q_idx, 't': t, 'score': score})
 
 if __name__ == "__main__":
     repo_id = "stair-lab/dsa_records"
@@ -104,9 +160,17 @@ if __name__ == "__main__":
     with open('correctness_matrix.pkl', 'wb') as file:
         pickle.dump(correctness_matrix, file)
 
-    nan_mask = np.isnan(correctness_matrix)
-    nan_count = np.sum(nan_mask)
-    print("Total number of NaN values:", nan_count)
+    api = HfApi()
+    api.upload_file(
+        path_or_fileobj="correctness_matrix.pkl",
+        path_in_repo="correctness_matrix.pkl",
+        repo_id="stair-lab/dsa_records",
+        repo_type="dataset",
+    )
+
+    # nan_mask = np.isnan(correctness_matrix)
+    # nan_count = np.sum(nan_mask)
+    # print("Total number of NaN values:", nan_count)
 
     cache_dir = config.HF_DATASETS_CACHE    
     shutil.rmtree(cache_dir)
