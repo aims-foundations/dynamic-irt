@@ -75,8 +75,13 @@ if __name__ == "__main__":
     seed = 42
     np.random.seed(42)
     inference = "mle"
+    device = "cuda"
 
     theta0, theta1, theta2, z = generate_parameters(N, Q)
+    print(f"Grountruth theta0: {theta0}")
+    print(f"Grountruth theta1: {theta1}")
+    print(f"Grountruth theta2: {theta2}")
+    print(f"Grountruth z: {z}")
     correctness = oracle(theta0, theta1, theta2, z, N, Q, T)
     plot(correctness, N)
 
@@ -89,16 +94,16 @@ if __name__ == "__main__":
 
     if inference == "mle":
         # Convert data to PyTorch tensors
-        y_obs_torch = torch.from_numpy(np.array(y_obs))
-        student_idx_torch = torch.from_numpy(np.array(y_obs)).long()
-        question_idx_torch = torch.from_numpy(np.array(question_idx))
-        t_flat_torch = torch.from_numpy(np.array(t_flat))
+        y_obs_torch = torch.from_numpy(np.array(y_obs)).to(device=device)
+        student_idx_torch = torch.from_numpy(np.array(y_obs)).to(device=device).long()
+        question_idx_torch = torch.from_numpy(np.array(question_idx)).to(device=device)
+        t_flat_torch = torch.from_numpy(np.array(t_flat)).to(device=device)
 
         # Define model parameters to optimize
-        theta0 = nn.Parameter(torch.randn(N, requires_grad=True))
-        theta1 = nn.Parameter(torch.abs(torch.randn(N, requires_grad=True)))
-        theta2 = nn.Parameter(torch.sigmoid(torch.randn(N, requires_grad=True)))
-        z = nn.Parameter(torch.abs(torch.randn(Q, requires_grad=True)))
+        theta0 = nn.Parameter(torch.randn(N, requires_grad=True, device=device))
+        theta1 = nn.Parameter(torch.abs(torch.randn(N, requires_grad=True, device=device)))
+        theta2 = nn.Parameter(torch.sigmoid(torch.randn(N, requires_grad=True, device=device)))
+        z = nn.Parameter(torch.abs(torch.randn(Q, requires_grad=True, device=device)))
 
         # Set up optimizer
         optimizer = optim.Adam([theta0, theta1, theta2, z], lr=0.001)
@@ -110,7 +115,7 @@ if __name__ == "__main__":
             )
             alpha = mean_correct * 200
             beta = (1 - mean_correct) * 200
-            nll = -torch.sum((alpha - 1) * torch.log(y_obs) + (beta - 1) * torch.log(1 - y_obs))
+            nll = -torch.mean((alpha - 1) * torch.log(y_obs) + (beta - 1) * torch.log(1 - y_obs))
             return nll
 
         # Training loop
@@ -125,10 +130,15 @@ if __name__ == "__main__":
                 print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}")
 
         # Extract optimized parameters
-        theta0_optimized = theta0.detach().numpy()
-        theta1_optimized = theta1.detach().numpy()
-        theta2_optimized = theta2.detach().numpy()
-        z_optimized = z.detach().numpy()
+        theta0_optimized = theta0.cpu().detach().numpy()
+        theta1_optimized = theta1.cpu().detach().numpy()
+        theta2_optimized = theta2.cpu().detach().numpy()
+        z_optimized = z.cpu().detach().numpy()
+
+        print(f"Optimized theta0: {theta0_optimized}")
+        print(f"Optimized theta1: {theta1_optimized}")
+        print(f"Optimized theta2: {theta2_optimized}")
+        print(f"Optimized z: {z_optimized}")
 
     elif inference == "mcmc":
         kernel = NUTS(model)
@@ -146,7 +156,7 @@ if __name__ == "__main__":
             "z": z.tolist()
         }
         with open('synthetic_data.json', 'w') as f:
-        json.dump(data, f, indent=4)
+            json.dump(data, f, indent=4)
 
         # MCMC diagnostic
         data_pred = az.from_numpyro(mcmc)
