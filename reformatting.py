@@ -1,3 +1,4 @@
+from argparse import ArgumentParser
 import json
 import os
 import pickle
@@ -109,8 +110,7 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
     for directory, files in directory_json_files.items():
         for file in files:
             data_q = load_dataset(
-                repo_id, data_files=f"{directory}/{file}", field="list_questions",
-                cache_dir="./cache"
+                repo_id, data_files=f"{directory}/{file}", field="list_questions"
             )
 
             for q in data_q["train"]:
@@ -118,8 +118,7 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
                 all_questions.append(processed_question)
 
             data_s = load_dataset(
-                repo_id, data_files=f"{directory}/{file}", field="student_answers",
-                cache_dir="./cache"
+                repo_id, data_files=f"{directory}/{file}", field="student_answers"
             )
             base_name, _ = os.path.splitext(file)
 
@@ -131,7 +130,7 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
                 for response in answer["response_history"]:
                     num_attempts = len(response["results"])
                     question_attempts.append(num_attempts)
-
+                    
     student_ids = [{}] * len(student_id_to_index)
     for sid, idx in student_id_to_index.items():
         student_ids[idx] = {"student_id": sid}
@@ -219,11 +218,13 @@ def upload_files(repo_id, file_paths):
 
 
 if __name__ == "__main__":
-    repo_id = "stair-lab/dsa_hk231"
-
-    directory_json_files = find_json_files(repo_id)
+    parser = ArgumentParser()
+    parser.add_argument("--course_name", help="Class Name", type=str, default="dsa_hk231")
+    args = parser.parse_args()
+    
+    directory_json_files = find_json_files(f"stair-lab/{args.course_name}_records")
     student_ids, unique_questions, correctness_matrix, time_matrix, response_matrix = (
-        format_dataset(repo_id, directory_json_files)
+        format_dataset(f"stair-lab/{args.course_name}_records", directory_json_files)
     )
 
     matrices = [
@@ -249,8 +250,4 @@ if __name__ == "__main__":
     with open("response_matrix.pkl", "wb") as file:
         pickle.dump(response_matrix, file)
 
-    upload_files(repo_id, matrices)
-
-    cache_dir = config.HF_DATASETS_CACHE
-    shutil.rmtree(cache_dir)
-    os.makedirs(cache_dir, exist_ok=True)
+    upload_files(f"stair-lab/{args.course_name}", matrices)
