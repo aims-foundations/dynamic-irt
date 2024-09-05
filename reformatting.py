@@ -80,10 +80,11 @@ def edit_distance(s1, s2):
 def filter_unique_questions(questions, threshold=0.8):
     if not questions:
         return []
-
+    full_filtered_questions = [questions[0]]
     filtered_questions = [tokenize(questions.pop(0))]
 
     while questions:
+        full_current_question = questions[0]
         current_question = tokenize(questions.pop(0))
         is_unique = True
 
@@ -94,8 +95,9 @@ def filter_unique_questions(questions, threshold=0.8):
 
         if is_unique:
             filtered_questions.append(current_question)
+            full_filtered_questions.append(full_current_question)
 
-    return filtered_questions
+    return filtered_questions, full_filtered_questions
 
 
 def format_dataset(repo_id, directory_json_files, threshold=0.8):
@@ -107,7 +109,8 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
     for directory, files in directory_json_files.items():
         for file in files:
             data_q = load_dataset(
-                repo_id, data_files=f"{directory}/{file}", field="list_questions"
+                repo_id, data_files=f"{directory}/{file}", field="list_questions",
+                cache_dir="./cache"
             )
 
             for q in data_q["train"]:
@@ -115,7 +118,8 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
                 all_questions.append(processed_question)
 
             data_s = load_dataset(
-                repo_id, data_files=f"{directory}/{file}", field="student_answers"
+                repo_id, data_files=f"{directory}/{file}", field="student_answers",
+                cache_dir="./cache"
             )
             base_name, _ = os.path.splitext(file)
 
@@ -128,16 +132,21 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
                     num_attempts = len(response["results"])
                     question_attempts.append(num_attempts)
 
+    student_ids = [{}] * len(student_id_to_index)
+    for sid, idx in student_id_to_index.items():
+        student_ids[idx] = {"student_id": sid}
     unique_questions = list(set(all_questions))
-    unique_questions_by_distance = filter_unique_questions(unique_questions)
+    unique_questions_by_distance, full_unique_questions_by_distance = (
+        filter_unique_questions(unique_questions)
+    )
     question_index = {qid: idx for idx, qid in enumerate(unique_questions_by_distance)}
 
     N = len(student_id_to_index)
     Q = len(unique_questions_by_distance)
     T = max(question_attempts, default=0)
-    correctness_matrix = np.full((N, Q, T), np.nan)
-    time_matrix = np.full((N, Q, T), "")
-    response_matrix = np.full((N, Q, T), "")
+    correctness_matrix = np.full((N, Q, T), -1).tolist()
+    time_matrix = np.full((N, Q, T), "").tolist()
+    response_matrix = np.full((N, Q, T), "").tolist()
     print(Q)
 
     for directory, files in directory_json_files.items():
@@ -155,18 +164,20 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
             }
             for answer in data_s["train"]:
                 s_idx = student_id_to_index[answer["id"]]
+                if "class" not in student_ids[s_idx]:
+                    student_ids[s_idx]["class"] = directory
                 for response in answer["response_history"]:
                     current_question = question_content_map.get(
                         response["question"], ""
                     )
 
                     q_idx = None
-                    for q_unique in unique_questions_by_distance:
+                    for idx, q_unique in enumerate(unique_questions_by_distance):
                         if (
                             edit_distance(tokenize(current_question), q_unique)
                             > threshold
                         ):
-                            q_idx = question_index.get(q_unique)
+                            q_idx = idx
                             break
                     if q_idx is not None:
                         for t, result in enumerate(response["results"]):
@@ -177,11 +188,17 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
                             )
                             timestamp = result["time"]
                             response = result["action"]
-                            correctness_matrix[s_idx, q_idx, t] = score
-                            time_matrix[s_idx, q_idx, t] = timestamp
-                            response_matrix[s_idx, q_idx, t] = response
+                            correctness_matrix[s_idx][q_idx][t] = score
+                            time_matrix[s_idx][q_idx][t] = timestamp
+                            response_matrix[s_idx][q_idx][t] = response
 
-    return correctness_matrix, time_matrix, response_matrix
+    return (
+        student_ids,
+        full_unique_questions_by_distance,
+        correctness_matrix,
+        time_matrix,
+        response_matrix,
+    )
 
 
 def upload_files(repo_id, file_paths):
@@ -195,7 +212,6 @@ def upload_files(repo_id, file_paths):
                 path_in_repo=file_name,
                 repo_id=repo_id,
                 repo_type="dataset",
-                token=hf_token,
             )
             print(f"Uploaded {file_name} successfully.")
         except Exception as e:
@@ -203,15 +219,26 @@ def upload_files(repo_id, file_paths):
 
 
 if __name__ == "__main__":
-    repo_id = "stair-lab/dsa_records"
-    hf_token = "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"
+    repo_id = "stair-lab/dsa_hk231"
 
     directory_json_files = find_json_files(repo_id)
-    correctness_matrix, time_matrix, response_matrix = format_dataset(
-        repo_id, directory_json_files
+    student_ids, unique_questions, correctness_matrix, time_matrix, response_matrix = (
+        format_dataset(repo_id, directory_json_files)
     )
 
-    matrices = ["correctness_matrix.pkl", "time_matrix.pkl", "response_matrix.pkl"]
+    matrices = [
+        "student_ids.pkl",
+        "unique_questions.pkl",
+        "correctness_matrix.pkl",
+        "time_matrix.pkl",
+        "response_matrix.pkl",
+    ]
+
+    with open("student_ids.pkl", "wb") as file:
+        pickle.dump(student_ids, file)
+
+    with open("unique_questions.pkl", "wb") as file:
+        pickle.dump(unique_questions, file)
 
     with open("correctness_matrix.pkl", "wb") as file:
         pickle.dump(correctness_matrix, file)
@@ -223,10 +250,6 @@ if __name__ == "__main__":
         pickle.dump(response_matrix, file)
 
     upload_files(repo_id, matrices)
-
-    # nan_mask = np.isnan(correctness_matrix)
-    # nan_count = np.sum(nan_mask)
-    # print("Total number of NaN values:", nan_count)
 
     cache_dir = config.HF_DATASETS_CACHE
     shutil.rmtree(cache_dir)
