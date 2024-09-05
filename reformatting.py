@@ -126,6 +126,8 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
     Q = len(unique_questions_by_distance)
     T = max(question_attempts, default=0)
     correctness_matrix = np.full((N, Q, T), np.nan)
+    time_matrix = np.full((N, Q, T), np.nan)
+    response_matrix = np.full((N, Q, T), np.nan)
     print(Q)
 
     for directory, files in directory_json_files.items():
@@ -147,26 +149,51 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
                     if q_idx is not None:
                         for t, result in enumerate(response['results']):
                             score = float(result['marks']) if result['marks'] != "" else float(-1)
+                            timestamp = result['time']
+                            response = result['action']
                             correctness_matrix[s_idx, q_idx, t] = score
+                            time_matrix[s_idx, q_idx, t] = timestamp
+                            response_matrix[s_idx, q_idx, t] = response
+                            
 
-    return correctness_matrix
+    return correctness_matrix, time_matrix, response_matrix
+
+def upload_files(repo_id, file_paths):
+    api = HfApi()
+
+    for file_path in file_paths:
+        file_name = os.path.basename(file_path)
+        try:
+            api.upload_file(
+                path_or_fileobj=file_path,
+                path_in_repo=file_name,
+                repo_id=repo_id,
+                repo_type="dataset",
+                token=hf_token
+            )
+            print(f"Uploaded {file_name} successfully.")
+        except Exception as e:
+            print(f"Failed to upload {file_name}: {str(e)}")
 
 if __name__ == "__main__":
     repo_id = "stair-lab/dsa_records"
+    hf_token = "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"
 
     directory_json_files = find_json_files(repo_id)
-    correctness_matrix = format_dataset(repo_id, directory_json_files)
+    correctness_matrix, time_matrix, response_matrix = format_dataset(repo_id, directory_json_files)
+
+    matrices = [correctness_matrix, time_matrix, response_matrix]
 
     with open('correctness_matrix.pkl', 'wb') as file:
         pickle.dump(correctness_matrix, file)
 
-    api = HfApi()
-    api.upload_file(
-        path_or_fileobj="correctness_matrix.pkl",
-        path_in_repo="correctness_matrix.pkl",
-        repo_id="stair-lab/dsa_records",
-        repo_type="dataset",
-    )
+    with open('time_matrix.pkl', 'wb') as file:
+        pickle.dump(correctness_matrix, file)
+
+    with open('response_matrix.pkl', 'wb') as file:
+        pickle.dump(correctness_matrix, file)
+
+    upload_files(repo_id, matrices)
 
     # nan_mask = np.isnan(correctness_matrix)
     # nan_count = np.sum(nan_mask)
