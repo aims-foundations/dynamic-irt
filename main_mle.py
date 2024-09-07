@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import pickle
 
 import matplotlib
@@ -45,6 +46,7 @@ def negative_log_likelihood(concentration, y_obs, student_idx, question_idx, t_f
 
 
 if __name__ == "__main__":
+    wandb.init(project="code_insights")
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--course_name", help="Course Name", type=str, default="dsa_hk231"
@@ -74,7 +76,6 @@ if __name__ == "__main__":
     student_info = pickle.load(open(f"{data_folder}/student_ids.pkl", "rb"))
 
     N, Q, T = y_obs.shape
-    print(N, Q, T)
     y_obs = y_obs.reshape(-1)
     t = np.linspace(1, T, T)
     t_flat = torch.from_numpy(np.tile(t, len(y_obs) // T)).to(device=device)
@@ -134,10 +135,13 @@ if __name__ == "__main__":
         loss.backward()
         optimizer.step()
 
+        wandb.log({"loss": loss.item()})
+
         if (epoch + 1) % 100 == 0:
             print(f"Epoch [{epoch + 1}/{args.epochs}], Loss: {loss.item():.4f}")
 
     # Extract optimized parameters
+    os.makedirs("results", exist_ok=True)
     with open(f"results/{args.course_name}_{args.concentration}.pkl", "wb") as f:
         pickle.dump(
             {
@@ -148,6 +152,4 @@ if __name__ == "__main__":
             f,
         )
 
-    theta0_optimized = theta0.cpu().detach().numpy()
-    theta1_optimized = theta1.cpu().detach().numpy()
-    z_optimized = z.cpu().detach().numpy()
+    wandb.finish()
