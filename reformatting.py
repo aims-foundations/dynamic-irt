@@ -1,8 +1,8 @@
-from argparse import ArgumentParser
 import json
 import os
 import pickle
 import shutil
+from argparse import ArgumentParser
 from urllib.parse import unquote, urlsplit
 
 import Levenshtein
@@ -127,10 +127,10 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
                 if student_id not in student_id_to_index:
                     student_id_to_index[student_id] = len(student_id_to_index)
 
-                for response in answer["response_history"]:
-                    num_attempts = len(response["results"])
+                for response_history in answer["response_history"]:
+                    num_attempts = len(response_history["results"]) - 2
                     question_attempts.append(num_attempts)
-                    
+
     student_ids = [{}] * len(student_id_to_index)
     for sid, idx in student_id_to_index.items():
         student_ids[idx] = {"student_id": sid}
@@ -146,10 +146,10 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
     correctness_matrix = np.full((N, Q, T), -1).tolist()
     time_matrix = np.full((N, Q, T), "").tolist()
     response_matrix = np.full((N, Q, T), "").tolist()
-    print(Q)
 
     for directory, files in directory_json_files.items():
         for file in files:
+            print(f"Processing {directory}/{file}")
             data_q = load_dataset(
                 repo_id, data_files=f"{directory}/{file}", field="list_questions"
             )
@@ -158,17 +158,20 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
             )
 
             question_content_map = {
-                f"Question {idx + 1}": q["question"]
+                f"Question {idx + 1}": (q["question"], q["max_scores"])
                 for idx, q in enumerate(data_q["train"])
+                if "max_scores" in q
             }
             for answer in data_s["train"]:
                 s_idx = student_id_to_index[answer["id"]]
                 if "class" not in student_ids[s_idx]:
                     student_ids[s_idx]["class"] = directory
-                for response in answer["response_history"]:
-                    current_question = question_content_map.get(
-                        response["question"], ""
+                for response_history in answer["response_history"]:
+                    current_question, question_max_score = question_content_map.get(
+                        response_history["question"], ("", 0)
                     )
+                    if not current_question or float(question_max_score) == 0:
+                        continue
 
                     q_idx = None
                     for idx, q_unique in enumerate(unique_questions_by_distance):
@@ -178,18 +181,27 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
                         ):
                             q_idx = idx
                             break
-                    if q_idx is not None:
-                        for t, result in enumerate(response["results"]):
-                            score = (
-                                float(result["marks"])
-                                if result["marks"] != ""
-                                else float(-1)
-                            )
-                            timestamp = result["time"]
-                            response = result["action"]
-                            correctness_matrix[s_idx][q_idx][t] = score
-                            time_matrix[s_idx][q_idx][t] = timestamp
-                            response_matrix[s_idx][q_idx][t] = response
+
+                    if q_idx is None:
+                        continue
+
+                    for t, result in enumerate(response_history["results"][1:-1]):
+                        if result["marks"] == "":
+                            score = 0
+                        elif float(result["marks"]) > float(question_max_score):
+                            break
+                        else:
+                            score = float(result["marks"]) / float(question_max_score)
+
+                        response = ""
+                        if result["action"].startswith("Prechecked"):
+                            response = result["action"].replace("Prechecked: ", "")
+                        elif result["action"].startswith("Submit"):
+                            response = result["action"].replace("Submit: ", "")
+
+                        correctness_matrix[s_idx][q_idx][t] = score
+                        time_matrix[s_idx][q_idx][t] = result["time"]
+                        response_matrix[s_idx][q_idx][t] = response
 
     return (
         student_ids,
@@ -219,9 +231,11 @@ def upload_files(repo_id, file_paths):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--course_name", help="Class Name", type=str, default="dsa_hk231")
+    parser.add_argument(
+        "--course_name", help="Class Name", type=str, default="dsa_hk231"
+    )
     args = parser.parse_args()
-    
+
     directory_json_files = find_json_files(f"stair-lab/{args.course_name}_records")
     student_ids, unique_questions, correctness_matrix, time_matrix, response_matrix = (
         format_dataset(f"stair-lab/{args.course_name}_records", directory_json_files)
