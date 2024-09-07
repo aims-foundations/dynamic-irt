@@ -1,0 +1,21 @@
+model_name_or_path: meta-llama/Meta-Llama-3.1-8B-Instruct
+bf16: true
+
+dataset_name: stair-lab/dsa_hk231_sft
+dataset_test_split: test
+dataset_text_field: text
+dataset_train_split: train
+warmup_ratio: 0.1
+save_steps: 500
+
+num_train_epochs: 1.0
+gradient_accumulation_steps: 16
+gradient_checkpointing: true
+per_device_train_batch_size: 2
+learning_rate: 0.0001
+logging_steps: 1
+lr_scheduler_type: cosine
+overwrite_output_dir: true
+output_dir: saves/llama3-8b-dsa_hk231
+report_to: none
+ddp_timeout: 180000000
