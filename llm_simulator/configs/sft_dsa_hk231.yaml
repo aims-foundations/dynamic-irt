@@ -6,12 +6,12 @@ dataset_test_split: test
 dataset_text_field: text
 dataset_train_split: train
 warmup_ratio: 0.1
-save_steps: 500
+save_steps: 200
 
-num_train_epochs: 1.0
-gradient_accumulation_steps: 16
+num_train_epochs: 2.0
+gradient_accumulation_steps: 8
 gradient_checkpointing: true
-per_device_train_batch_size: 2
+per_device_train_batch_size: 1
 learning_rate: 0.0001
 logging_steps: 1
 lr_scheduler_type: cosine
