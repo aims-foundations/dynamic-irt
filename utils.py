@@ -5,14 +5,10 @@ This file provides support functions.
 import json
 import os
 import random
-from urllib.parse import unquote, urlsplit
 
 import matplotlib.pyplot as plt
 import numpy as np
-
-import requests
 import torch
-from bs4 import BeautifulSoup
 
 
 def set_seed(seed):

@@ -1,4 +1,3 @@
-import json
 import os
 import pickle
 import shutil
@@ -249,19 +248,19 @@ if __name__ == "__main__":
         "response_matrix.pkl",
     ]
 
-    with open("student_ids.pkl", "wb") as file:
+    with open("data/student_ids.pkl", "wb") as file:
         pickle.dump(student_ids, file)
 
-    with open("unique_questions.pkl", "wb") as file:
+    with open("data/unique_questions.pkl", "wb") as file:
         pickle.dump(unique_questions, file)
 
-    with open("correctness_matrix.pkl", "wb") as file:
+    with open("data/correctness_matrix.pkl", "wb") as file:
         pickle.dump(correctness_matrix, file)
 
-    with open("time_matrix.pkl", "wb") as file:
+    with open("data/time_matrix.pkl", "wb") as file:
         pickle.dump(time_matrix, file)
 
-    with open("response_matrix.pkl", "wb") as file:
+    with open("data/response_matrix.pkl", "wb") as file:
         pickle.dump(response_matrix, file)
 
     upload_files(f"stair-lab/{args.course_name}", matrices)

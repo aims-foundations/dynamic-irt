@@ -56,7 +56,7 @@ if __name__ == "__main__":
         "--concentration",
         help="Concentration hyperparameter",
         type=float,
-        default=200.0,
+        default=10.0,
     )
     parser.add_argument("--epochs", help="Number of epochs", type=int, default=10000)
     parser.add_argument(
@@ -132,6 +132,8 @@ if __name__ == "__main__":
             question_idx_train,
             t_flat_train,
         )
+        cost = (theta1**2 * ((theta1 < 0).float() + (theta1 > 1).float())).mean()
+        loss = loss + cost
         loss.backward()
         optimizer.step()
 
