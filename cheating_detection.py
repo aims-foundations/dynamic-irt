@@ -52,11 +52,11 @@ def find_json_files(repo_id):
 
 
 def fetch_unique_questions(url):
-    response = requests.get(url)
+    response = requests.get(url, stream=True)
     if response.status_code == 200:
         try:
-            with open(filepath, 'rb') as file:  # Open the file in binary read mode
-                unique_questions = pickle.load(response.content)
+            # print(response.content)
+            unique_questions = pickle.loads(response.content)
             return unique_questions
         except Exception as e:
             print(f"Failed to load and deserialize the pickle file: {e}")
@@ -133,7 +133,7 @@ def find_matching_question(question_text, unique_questions, threshold=0.8):
     return None
 
 def main(repo_id, directory_json_files, threshold=0.9):
-    unique_questions = fetch_unique_questions(https://huggingface.co/datasets/stair-lab/dsa_hk231_records/blob/main/unique_questions.pkl)
+    unique_questions = fetch_unique_questions(f"https://huggingface.co/datasets/{repo_id}/resolve/main/unique_questions.pkl")
     all_records = {}
     cheaters = {}
 
