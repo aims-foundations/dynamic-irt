@@ -97,6 +97,26 @@ def similarity(s1, s2):
         return 0
     return Levenshtein.ratio(s1, s2)
 
+def filter_cheating_between_students(student_records, threshold=0.8):
+    if not student_records:
+        return []
+
+    filtered_records = [tokenize(student_records.pop(0))]
+
+    while student_records:
+        current_record = tokenize(student_records.pop(0))
+        is_unique = True
+
+        for accepted_record in filtered_records:
+            if edit_distance(current_record, accepted_record) > threshold:
+                is_unique = False
+                break
+
+        if is_unique:
+            filtered_records.append(current_record)
+
+    return filtered_records
+
 def detect_cheating(records, change_threshold=0.9, time_threshold=datetime.timedelta(minutes=10)):
     if not records:
         return []
@@ -195,11 +215,20 @@ def main(repo_id, directory_json_files, threshold=0.9):
                         if final_response:
                             all_records.setdefault(matching_question, {}).setdefault(student_id, []).append(final_response)
 
+    filtered_all_records = {}
+    for q, s_responses in all_records.items():
+        filtered_all_records[q] = {}
+        for sid, s_response in s_responses.items():
+            responses_list = [resp["response"] for resp in s_response]
+            filtered_responses = filter_cheating_between_students(responses_list)
+
+            filtered_all_records[q][sid] = [{"response": resp} for resp in filtered_responses]
+
      with open('cheating_records.json', 'w') as f:
         json.dump(cheaters, f, indent=4, default=datetime_converter)
 
     with open('non_cheating_records.json', 'w') as f:
-        json.dump(all_records, f, indent=4, default=datetime_converter)
+        json.dump(filtered_all_records, f, indent=4, default=datetime_converter)
 
     return
 
