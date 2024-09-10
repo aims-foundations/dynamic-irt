@@ -9,5 +9,3 @@ pandas
 scikit-learn
 datasets
 python-Levenshtein
-bs4
-requests
