@@ -2,10 +2,27 @@
 This file provides support functions.
 """
 
-import os
 import json
-import numpy as np
+import os
+import random
+
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
+
+def ensure_dir(dir_path):
+    os.makedirs(dir_path, exist_ok=True)
+
+
+def set_seed(seed):
+    random.seed(seed)
+    # torch.backends.cudnn.deterministic=True
+    # torch.backends.cudnn.benchmark = False
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def parse_score(name):
