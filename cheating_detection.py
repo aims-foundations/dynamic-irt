@@ -4,6 +4,7 @@ import pickle
 import shutil
 from urllib.parse import unquote, urlsplit
 from tqdm import tqdm
+from Levenshtein import distance as levenshtein_distance
 import Levenshtein
 import numpy as np
 import pandas as pd
@@ -94,17 +95,28 @@ def filter_cheating_between_students(student_records, threshold=0.8):
     if not student_records:
         return [], []
 
+    # Tokenize the first record and initialize lists
     filtered_records = [tokenize(student_records.pop(0))]
     potential_copies = []
 
+    # Process remaining records
     while student_records:
         current_record = tokenize(student_records.pop(0))
         is_unique = True
 
+        # Compare with previously accepted records
         for accepted_record in filtered_records:
-            if edit_distance(current_record, accepted_record) <= threshold:
+            dist = levenshtein_distance(current_record, accepted_record)
+            normalized_distance = dist / max(len(current_record), len(accepted_record))
+
+            # Check if the normalized distance is within the threshold
+            if normalized_distance <= threshold:
                 is_unique = False
-                potential_copies.append(current_record)  # Store potential copies
+                potential_copies.append({
+                    "pair": (current_record, accepted_record),
+                    "edit_distance": dist,
+                    "normalized_distance": normalized_distance
+                })
                 break
 
         if is_unique:
