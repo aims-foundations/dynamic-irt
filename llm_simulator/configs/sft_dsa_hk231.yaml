@@ -1,6 +1,11 @@
 model_name_or_path: meta-llama/Meta-Llama-3.1-8B-Instruct
 bf16: true
 
+do_eval: true
+eval_strategy: "steps"
+eval_on_start: true
+eval_steps: 200
+
 dataset_name: stair-lab/dsa_hk231_sft
 dataset_test_split: test
 dataset_text_field: text
@@ -8,6 +13,7 @@ dataset_train_split: train
 warmup_ratio: 0.1
 save_steps: 200
 
+max_seq_length: 4096
 num_train_epochs: 2.0
 gradient_accumulation_steps: 8
 gradient_checkpointing: true
@@ -17,5 +23,8 @@ logging_steps: 1
 lr_scheduler_type: cosine
 overwrite_output_dir: true
 output_dir: saves/llama3-8b-dsa_hk231
-report_to: none
+report_to: wandb
 ddp_timeout: 180000000
+
+push_to_hub_model_id: "code-insights-llm_simulator"
+push_to_hub_organization: "stair-lab"

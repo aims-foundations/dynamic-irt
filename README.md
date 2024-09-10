@@ -22,3 +22,22 @@ python main_analyzing.py [-h] [--course_name COURSE_NAME] [--class_name CLASS_NA
 - DSA-HK231
     + L09
     + DT01
+
+## LLM Simulator
+First, we train LLM using SFT.
+```bash
+trl sft --config configs/sft_dsa_hk231.yaml \
+    --use_peft \
+    --lora_r 256 \
+    --lora_alpha 512 \
+    --lora_dropout 0.1
+```
+
+After that, we merge the model and push it to HuggingFace Hub.
+```bash
+python merge_push.py --config configs/sft_dsa_hk231.yaml \
+    --use_peft \
+    --lora_r 256 \
+    --lora_alpha 512 \
+    --lora_dropout 0.1
+```
