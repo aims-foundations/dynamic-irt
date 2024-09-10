@@ -11,6 +11,10 @@ import numpy as np
 import torch
 
 
+def ensure_dir(dir_path):
+    os.makedirs(dir_path, exist_ok=True)
+
+
 def set_seed(seed):
     random.seed(seed)
     # torch.backends.cudnn.deterministic=True

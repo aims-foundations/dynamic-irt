@@ -6,13 +6,14 @@ import pickle
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
-from utils import set_seed
+from utils import ensure_dir, set_seed
 
 matplotlib.rcParams["text.usetex"] = True
 
@@ -66,6 +67,7 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     set_seed(args.seed)
+    ensure_dir(f"results/{args.course_name}_{args.concentration}")
     data_folder = snapshot_download(
         repo_id=f"stair-lab/{args.course_name}", repo_type="dataset"
     )
@@ -122,6 +124,8 @@ if __name__ == "__main__":
     # Set up optimizer
     optimizer = optim.Adam([theta0, theta1, z], lr=0.001)
 
+    saving_losses = {"loss": [], "test_loss": []}
+
     # Training loop
     for epoch in tqdm(range(args.epochs), desc="Fitting model"):
         optimizer.zero_grad()
@@ -137,14 +141,27 @@ if __name__ == "__main__":
         loss.backward()
         optimizer.step()
 
-        wandb.log({"loss": loss.item()})
+        with torch.no_grad():
+            test_loss = negative_log_likelihood(
+                args.concentration,
+                y_obs_test,
+                student_idx_test,
+                question_idx_test,
+                t_flat_test,
+            )
+            test_loss = test_loss + cost
 
-        if (epoch + 1) % 100 == 0:
-            print(f"Epoch [{epoch + 1}/{args.epochs}], Loss: {loss.item():.4f}")
+        saving_losses["loss"].append(loss.item())
+        saving_losses["test_loss"].append(test_loss.item())
+        wandb.log({"loss": loss.item(), "test_loss": test_loss.item()})
+
+        if (epoch + 1) % 1000 == 0:
+            print(
+                f"Epoch [{epoch + 1}/{args.epochs}], Loss: {loss.item():.4f}, Test Loss: {test_loss.item():.4f}"
+            )
 
     # Extract optimized parameters
-    os.makedirs("results", exist_ok=True)
-    with open(f"results/{args.course_name}_{args.concentration}.pkl", "wb") as f:
+    with open(f"results/{args.course_name}_{args.concentration}/model.pkl", "wb") as f:
         pickle.dump(
             {
                 "theta0": theta0,
@@ -153,5 +170,12 @@ if __name__ == "__main__":
             },
             f,
         )
+
+    df = pd.DataFrame(saving_losses)
+    df.to_json(
+        f"results/{args.course_name}_{args.concentration}/losses.json",
+        index=False,
+        indent=4,
+    )
 
     wandb.finish()
