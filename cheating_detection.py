@@ -224,7 +224,7 @@ def main(repo_id, directory_json_files, threshold=0.9):
 
             filtered_all_records[q][sid] = [{"response": resp} for resp in filtered_responses]
 
-     with open('cheating_records.json', 'w') as f:
+    with open('cheating_records.json', 'w') as f:
         json.dump(cheaters, f, indent=4, default=datetime_converter)
 
     with open('non_cheating_records.json', 'w') as f:
