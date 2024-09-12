@@ -50,7 +50,6 @@ DATA_LINKS = {
     },
     "PF-HK232": {
         "ALL": "https://lms.hcmut.edu.vn/course/view.php?id=31275",
-        "ALL-1027": "https://lms.hcmut.edu.vn/course/view.php?id=31071",
     },
     "PF-HK222": {
         "ALL": "https://e-learning.hcmut.edu.vn/course/view.php?id=94316",
