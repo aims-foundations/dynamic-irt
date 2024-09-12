@@ -1,124 +1,223 @@
-"""
-Run this file to get students' score analysis.
-"""
-
 import argparse
 import json
 import os
+from urllib.parse import unquote, urlsplit
 
-from utils import (
-    plot_scores_all_questions,
-    plot_scores_per_question,
-    plot_scores_per_week,
-    process_scores_all_questions,
-    process_scores_per_question,
-    process_scores_per_week,
-)
-
-
-def plot_per_question(course_question, class_question):
-    """
-    This function plots student grades per question.
-    """
-    namepath = f"{course_question}/{class_question}"
-    data = []
-    directory = f"data/{namepath}"
-    for json_file in os.listdir(directory):
-        if json_file.endswith(".json"):
-            file_path = os.path.join(directory, json_file)
-            with open(file_path, "r", encoding="utf-8") as file:
-                data.append(json.load(file))
-    processed_data = process_scores_per_question(data)
-    plot_scores_per_question(namepath, processed_data)
+import matplotlib.pyplot as plt
+import numpy as np
+import requests
+from bs4 import BeautifulSoup
+from datasets import load_dataset
+from utils import find_global_max
 
 
-def plot_all_questions(course_all_questions, class_all_questions):
-    """
-    This function plots student grades for all questions.
-    """
-    namepath = f"{course_all_questions}/{class_all_questions}"
-    all_data = []
-    for json_file in os.listdir(f"data/{namepath}"):
-        if json_file.endswith(".json"):
-            file_path = os.path.join(f"data/{namepath}", json_file)
-            with open(file_path, "r", encoding="utf-8") as file:
-                data = json.load(file)
-                all_data.append((json_file, data))
-    global_max = max(
-        len(attempt["records"])
-        for _, dataset in all_data
-        for attempt in dataset["attempts"]
-    )
-    processed_records = process_scores_all_questions(all_data, global_max)
-    plot_scores_all_questions(namepath, processed_records, global_max)
+def plot_per_question(repo_id, course_name, class_name):
+    url = f"https://huggingface.co/datasets/{repo_id}/tree/main/{class_name}/"
+    response = requests.get(url)
+    json_files = []
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        links = soup.find_all("a")
+
+        for link in links:
+            href = link.get("href")
+            if href.endswith(".json"):
+                path = urlsplit(href).path
+                filename = path.split("/")[-1]
+                filename = unquote(filename)
+                json_files.append(filename)
+    else:
+        print("Failed to retrieve data:", response.status_code)
+
+    for json_file in json_files:
+        data_q = load_dataset(
+            repo_id, data_files=f"{class_name}/{json_file}", field="list_questions"
+        )
+        data_s = load_dataset(
+            repo_id, data_files=f"{class_name}/{json_file}", field="student_answers"
+        )
+
+        ids = []
+        for answers in data_s["train"]:
+            ids.append(answers["id"])
+
+        for idx in range(len(data_q["train"])):
+            plt.clf()
+
+            max_score = data_q["train"][idx]["max_scores"]
+            q_index = idx + 1
+
+            records = []
+            for answers in data_s["train"]:
+                for answer in answers["response_history"]:
+                    marks = []
+                    if answer["question"] == f"Question {q_index}":
+                        mark_per_attempt = []
+                        for score_idx in range(len(answer["results"])):
+                            if answer["results"][score_idx]["marks"] != "":
+                                mark_per_attempt.append(
+                                    answer["results"][score_idx]["marks"]
+                                )
+
+                    marks.append(mark_per_attempt)
+                records.extend(marks)
+
+            try:
+                records = [
+                    [float(mark) * 10 / max_score for mark in student_marks]
+                    for student_marks in records
+                ]
+            except:
+                continue
+
+            print("PLOT")
+
+            max_attempts = max(len(student_marks) for student_marks in records)
+
+            x = list(range(1, max_attempts + 1))
+
+            # Find the average score for each number of attemps
+            # Pad the marks of each student with highest marks
+            padded_records = []
+            for student_marks in records:
+                if student_marks:
+                    padded_records.append(
+                        student_marks
+                        + [max(student_marks)] * (max_attempts - len(student_marks))
+                    )
+                else:
+                    padded_records.append([0] * max_attempts)
+
+            padded_records = np.array(padded_records)
+            average_marks = np.nanmean(padded_records, axis=0)
+
+            for i, student_marks in enumerate(padded_records):
+                plt.plot(x, student_marks, label=f"{ids[i]}", color="blue", alpha=0.3)
+
+            plt.plot(x, average_marks, label="Average Marks", linewidth=3, color="red")
+
+            lab_name = json_file.split(".")[0]
+            # Add labels and legend
+            plt.xlabel("Attempts")
+            plt.ylabel("Marks")
+            plt.title(f"{lab_name} - Q{q_index}")
+            plt.savefig(f"plots/{course_name}/{class_name}/{lab_name}-Q{q_index}.png")
 
 
-def plot_weeks(weeks, course_weeks, class_weeks):
-    """
-    This function plots student grades in weeks.
-    """
-    namepath = f"{course_weeks}/{class_weeks}"
-    student_ids = set()
-    for week in weeks:
-        for exercise in week:
-            with open(
-                os.path.join(f"data/{namepath}", exercise), "r", encoding="utf-8"
-            ) as file:
-                data = json.load(file)
-            student_ids.update(attempt["id"] for attempt in data["attempts"])
-    students = process_scores_per_week(weeks, student_ids, namepath)
-    weekly_averages = {
-        student_id: [sum(week) / len(week) for week in weeks_scores]
-        for student_id, weeks_scores in students.items()
-    }
-    plot_scores_per_week(weekly_averages, len(weeks[0]))
+def plot_all_questions(repo_id, course_name, class_name):
+    plt.clf()
+
+    all_padded_records = []
+    global_max = find_global_max(repo_id, course_name, class_name)
+
+    x = list(range(1, global_max + 1))
+
+    url = f"https://huggingface.co/datasets/{repo_id}/tree/main/{class_name}/"
+    response = requests.get(url)
+    json_files = []
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        links = soup.find_all("a")
+
+        for link in links:
+            href = link.get("href")
+            if href.endswith(".json"):
+                path = urlsplit(href).path
+                filename = path.split("/")[-1]
+                filename = unquote(filename)
+                json_files.append(filename)
+    else:
+        print("Failed to retrieve data:", response.status_code)
+
+    for json_file in json_files:
+        data_q = load_dataset(
+            repo_id, data_files=f"{class_name}/{json_file}", field="list_questions"
+        )
+        data_s = load_dataset(
+            repo_id, data_files=f"{class_name}/{json_file}", field="student_answers"
+        )
+
+        ids = []
+        for answers in data_s["train"]:
+            ids.append(answers["id"])
+
+        for idx in range(len(data_q["train"])):
+            max_score = data_q["train"][idx]["max_scores"]
+            q_index = idx + 1
+
+            records = []
+            for answers in data_s["train"]:
+                for answer in answers["response_history"]:
+                    marks = []
+                    if answer["question"] == f"Question {q_index}":
+                        mark_per_attempt = []
+                        for score_idx in range(len(answer["results"])):
+                            if answer["results"][score_idx]["marks"] != "":
+                                mark_per_attempt.append(
+                                    answer["results"][score_idx]["marks"]
+                                )
+
+                    marks.append(mark_per_attempt)
+                records.extend(marks)
+
+            try:
+                records = [
+                    [float(mark) * 10 / max_score for mark in student_marks]
+                    for student_marks in records
+                ]
+            except:
+                continue
+            print(f"PLOT {idx}")
+
+            padded_records = []
+            for student_marks in records:
+                if student_marks:
+                    padded_records.append(
+                        student_marks
+                        + [max(student_marks)] * (global_max - len(student_marks))
+                    )
+                    all_padded_records.append(
+                        student_marks
+                        + [max(student_marks)] * (global_max - len(student_marks))
+                    )
+                else:
+                    padded_records.append([0] * global_max)
+                    all_padded_records.append([0] * global_max)
+
+            padded_records = np.array(padded_records)
+
+            # Plot each student's attempts
+            for i, student_marks in enumerate(padded_records):
+                plt.plot(x, student_marks, label=f"{ids[i]}", color="blue", alpha=0.2)
+
+    all_padded_records = np.array(all_padded_records)
+    all_average_marks = np.nanmean(all_padded_records, axis=0)
+
+    plt.plot(x, all_average_marks, label="All Average Marks", linewidth=3, color="Red")
+    plt.xlabel("Attempts")
+    plt.ylabel("Marks")
+    plt.title(f"All questions")
+    plt.savefig(f"plots/{course_name}/{class_name}/all-questions.png")
 
 
 def main():
-    """
-    Main function
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--course_name", help="Class Name", type=str, default="DSA-HK231"
+        "--course_name", help="Course Name", type=str, default="DSA-HK231"
     )
-    parser.add_argument("--class_name", help="Class Name", type=str, default="L09")
+    parser.add_argument("--class_name", help="Class Name", type=str, default="L01")
     args = parser.parse_args()
     course_name = args.course_name
     class_name = args.class_name
+
+    repo_id = "stair-lab/dsa_records"
+
     os.makedirs("plots", exist_ok=True)
     os.makedirs(f"plots/{course_name}", exist_ok=True)
     os.makedirs(f"plots/{course_name}/{class_name}", exist_ok=True)
 
-    plot_per_question(course_name, class_name)
-    plot_all_questions(course_name, class_name)
-
-    weeks_file_list = [
-        [
-            "OOP_Review.json",
-            "Recursion.json",
-            "Array_List.json",
-            "Singly_Linked_List.json",
-        ],
-        [
-            "Week_2_Exam.json",
-            "Doubly_Linked_List.json",
-            "Stack.json",
-            "Queue.json",
-            "Sorting_(Easy).json",
-        ],
-        [
-            "Week_3_Exam.json",
-            "Sorting_(Advance).json",
-            "Binary_Tree.json",
-            "Binary_Search_Tree.json",
-        ],
-        ["Week_4_Exam.json", "AVL_Tree.json", "B-Tree.json"],
-        ["Week_5_Exam.json", "Heap.json", "Search.json"],
-        ["Week_6_Exam.json", "Graph.json", "Hash.json"],
-    ]
-
-    plot_weeks(weeks_file_list, course_name, class_name)
+    plot_per_question(repo_id, course_name, class_name)
+    plot_all_questions(repo_id, course_name, class_name)
 
 
 if __name__ == "__main__":

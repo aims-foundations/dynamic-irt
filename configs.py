@@ -1,7 +1,3 @@
-"""
-This file saves all variables.
-"""
-
 LOGIN_USER = "010344"
 LOGIN_PASSWD = "010344"
 
@@ -44,12 +40,11 @@ DATA_LINKS = {
         "L06": "https://e-learning.hcmut.edu.vn/course/view.php?id=72809",
         "L07": "https://e-learning.hcmut.edu.vn/course/view.php?id=72803",
         "L08": "https://e-learning.hcmut.edu.vn/course/view.php?id=72805",
-        "CC01": "https://e-learning.hcmut.edu.vn/course/view.php?id=60182",
-        "CC02": "https://e-learning.hcmut.edu.vn/course/view.php?id=60184",
-        "CC03": "https://e-learning.hcmut.edu.vn/course/view.php?id=60180",
-        "CC04": "https://e-learning.hcmut.edu.vn/course/view.php?id=60181",
-        "CC05": "https://e-learning.hcmut.edu.vn/course/view.php?id=60183",
-        "CN01": "https://e-learning.hcmut.edu.vn/course/view.php?id=72787",
+        "CC01": "https://e-learning.hcmut.edu.vn/course/view.php?id=67400",
+        "CC02": "https://e-learning.hcmut.edu.vn/course/view.php?id=67401",
+        "CC03": "https://e-learning.hcmut.edu.vn/course/view.php?id=67400",
+        "CC04": "https://e-learning.hcmut.edu.vn/course/view.php?id=67401",
+        "CC05": "https://e-learning.hcmut.edu.vn/course/view.php?id=67400",
         "CN02": "https://e-learning.hcmut.edu.vn/course/view.php?id=75670",
         "ALL": "https://e-learning.hcmut.edu.vn/course/view.php?id=74329",
     },

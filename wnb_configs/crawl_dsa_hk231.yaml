@@ -1,0 +1,11 @@
+program: main_crawling.py
+project: student-score-crawler
+method: grid
+metric:
+    goal: minimize
+    name: loss
+parameters:
+    course_name: 
+        values: [DSA-HK231]
+    class_name: 
+        values: [CC04, CC05, CC06, CC07, CC08, CN01, CN02]
