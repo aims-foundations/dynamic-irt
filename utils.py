@@ -18,6 +18,13 @@ def parse_score(header_text):
 
 def filter_class_group(details, sid, class_name):
     for detail in details:
+        if detail["Class Group"] == "No groups":
+            if detail["ID"] == sid:
+                print(
+                    f"Processing student ID: {detail['ID']} with only a class group."
+                )
+                return True
+        
         if detail["ID"] == sid and detail["Class Group"] == class_name:
             print(
                 f"Processing student ID: {detail['ID']} from Class Group: {detail['Class Group']}"

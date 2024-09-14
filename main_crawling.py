@@ -80,7 +80,7 @@ if __name__ == "__main__":
     student_details = []
 
     def extract_data():
-        rows = wait.until(
+        rows = WebDriverWait(driver, 30).until(
             EC.presence_of_all_elements_located(
                 (By.CSS_SELECTOR, "table#participants tbody tr")
             )
@@ -120,7 +120,7 @@ if __name__ == "__main__":
             )
 
     navigate_pagination()
-    print("Extracted Student Details:", len(student_details))
+    # print("Extracted Student Details:", student_details)
 
     xpath_expression = (
         f"//a[starts-with(@href, 'https://{domain}/mod/quiz/view.php?id=')]"
@@ -176,46 +176,51 @@ if __name__ == "__main__":
             print(max_scores)
 
         student_rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
-
+        # print(f"Total rows found: {len(student_rows)}")
         for index, row in enumerate(student_rows):
-            if "emptyrow" in row.get_attribute("class"):
+            row_classes = row.get_attribute("class")
+            # print(f"Row {index} classes: {row_classes}") 
+            
+            if not row_classes or "emptyrow" in row_classes:
                 print("Skipping empty row.")
                 continue
 
-            try:
-                student_link = f"mod-quiz-report-overview-report_r{index}_c2"
-                link = wait.until(EC.presence_of_element_located((By.ID, student_link)))
-
+            if "gradedattempt" in row_classes:
                 try:
-                    student_name = None
-                    review_link = None
-                    student_id = row.find_element(
-                        By.CSS_SELECTOR, "td.cell.c3"
-                    ).text.strip()
-                    if filter_class_group(student_details, student_id, class_name):
-                        student_name = link.find_element(By.TAG_NAME, "a").text.strip()
-                        review_link = row.find_element(
-                            By.CSS_SELECTOR, "a.reviewlink"
-                        ).get_attribute("href")
-
-                    if student_name and review_link:
-                        print(student_name, student_id, review_link)
-                        data["student_answers"].append(
-                            {
-                                "name": student_name,
-                                "id": student_id,
-                                "review_link": review_link,
-                            }
+                    student_link = f"mod-quiz-report-overview-report_r{index}_c2"
+                    link = wait.until(EC.presence_of_element_located((By.ID, student_link)))
+    
+                    try:
+                        student_name = None
+                        review_link = None
+                        student_id = row.find_element(
+                            By.CSS_SELECTOR, "td.cell.c3"
+                        ).text.strip()
+                        # print(student_id)
+                        if filter_class_group(student_details, student_id, class_name):
+                            student_name = link.find_element(By.TAG_NAME, "a").text.strip()
+                            review_link = row.find_element(
+                                By.CSS_SELECTOR, "a.reviewlink"
+                            ).get_attribute("href")
+                        
+                        if student_name and review_link:
+                            print(student_name, student_id, review_link)
+                            data["student_answers"].append(
+                                {
+                                    "name": student_name,
+                                    "id": student_id,
+                                    "review_link": review_link,
+                                }
+                            )
+                    except NoSuchElementException:
+                        print(
+                            f"Missing expected elements within the link ID {student_link}"
                         )
-                except NoSuchElementException:
-                    print(
-                        f"Missing expected elements within the link ID {student_link}"
-                    )
-                    continue
+                        continue
 
-            except TimeoutException:
-                print(f"Element with ID {student_link} did not appear in time.")
-                continue
+                except TimeoutException:
+                    print(f"Element with ID {student_link} did not appear in time.")
+                    continue
 
         if not data["student_answers"]:
             print("There are no students in this quiz link.")
