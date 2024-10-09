@@ -48,7 +48,7 @@ class CrawlData:
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
+        # chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--ignore-ssl-errors=yes")
         chrome_options.add_argument("--ignore-certificate-errors")
 
@@ -208,7 +208,7 @@ if __name__ == "__main__":
         "--course_name", help="Class Name", type=str, default="DSA-HK231"
     )
     parser.add_argument("--class_name", help="Class Name", type=str, default="CC01")
-    parser.add_argument("--timeout", help="Timeout for waiting", type=int, default=90)
+    parser.add_argument("--timeout", help="Timeout for waiting", type=int, default=300)
     args = parser.parse_args()
 
     # Chrome setup
@@ -291,6 +291,12 @@ if __name__ == "__main__":
             print("Failed to get", quiz_link)
             continue
 
+        first_part = crawler.driver.title.split(":")[0]
+        filename = re.sub(f"[{string.punctuation}]", "_", first_part)
+        if os.path.exists(f"data/{course_name}/{class_name}/{filename}.json"):
+            print("Skipping: ", quiz_link)
+            continue
+
         topic_data = {
             "lab_name": crawler.driver.title.split(":")[0].strip(),
             "list_questions": [],
@@ -357,7 +363,7 @@ if __name__ == "__main__":
         topic_data["list_questions"] = crawler.get_question(domain, course_id)
 
         # Crawl answers
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             futures = [
                 executor.submit(crawler.get_student_answers, record)
                 for record in topic_data["student_answers"]
@@ -369,10 +375,9 @@ if __name__ == "__main__":
         # Append to data
         all_data.append(topic_data)
 
-        first_part = crawler.driver.title.split(":")[0]
-        filename = re.sub(f"[{string.punctuation}]", "_", first_part) + ".json"
+        # Save data
         with open(
-            f"data/{course_name}/{class_name}/{filename}", "w", encoding="utf-8"
+            f"data/{course_name}/{class_name}/{filename}.json", "w", encoding="utf-8"
         ) as json_file:
             json.dump(topic_data, json_file)
 
