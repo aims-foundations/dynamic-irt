@@ -1,7 +1,10 @@
 import json
 import os
 import re
+import time
 from urllib.parse import parse_qs, unquote, urlparse, urlsplit
+
+from selenium import webdriver
 
 from selenium.common.exceptions import (
     NoSuchElementException,
@@ -11,8 +14,23 @@ from selenium.common.exceptions import (
 )
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
-from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
+
+
+def run_crawler(crawler, url):
+    trial = 0
+    success = False
+    while trial < 10:
+        try:
+            crawler.driver.get(url)
+            success = True
+            break
+        except:
+            trial += 1
+            time.sleep(3)
+
+    return success
+
 
 def parse_score(header_text):
     search_result = re.search(r"/(\d+\.\d+)", header_text)
@@ -26,16 +44,15 @@ def filter_class_group(details, sid, class_name):
     for detail in details:
         if detail["Class Group"] == "No groups":
             if detail["ID"] == sid:
-                print(f"Processing student ID: {detail['ID']} with only a class group.")
                 return True
 
-        if detail["ID"] == sid and (detail["Class Group"] == class_name or detail["Class Group"] == "All"):
-            print(
-                f"Processing student ID: {detail['ID']} from Class Group: {detail['Class Group']}"
-            )
+        if detail["ID"] == sid and (
+            detail["Class Group"] == class_name or detail["Class Group"] == "All"
+        ):
             return True
 
     return False
+
 
 def safe_find_element(driver, by, value):
     try:
@@ -47,15 +64,18 @@ def safe_find_element(driver, by, value):
         print(f"Timeout while trying to find element {value}")
         return None
 
+
 def safe_navigate(driver, service, chrome_options, url):
     try:
         driver.get(url)
     except WebDriverException:
         print(f"Error navigating to {url}. Attempting to recover...")
         driver.quit()
-        driver = webdriver.Chrome(service=service, options=chrome_options)  # Reinitialize the driver
+        driver = webdriver.Chrome(
+            service=service, options=chrome_options
+        )  # Reinitialize the driver
         driver.get(url)
-    return driver 
+    return driver
 
 
 def get_test_cases(driver):
