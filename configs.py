@@ -1,6 +1,9 @@
 LOGIN_USER = "010344"
 LOGIN_PASSWD = "010344"
 
+chromedriver_path = "/afs/cs.stanford.edu/u/nqduc/chromedriver-linux64/chromedriver"
+chrome_binary_path = "/afs/cs.stanford.edu/u/nqduc/chrome-linux64/chrome"
+
 DATA_LINKS = {
     "DSA-HK231": {
         "L01": "https://e-learning.hcmut.edu.vn/course/view.php?id=109032",

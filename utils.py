@@ -4,6 +4,8 @@ import re
 import time
 from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
+from Levenshtein import distance
+
 from selenium import webdriver
 
 from selenium.common.exceptions import (
@@ -15,6 +17,10 @@ from selenium.common.exceptions import (
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+
+
+def compute_ed(original, list_str):
+    return [distance(original, x) for x in list_str]
 
 
 def run_crawler(crawler, url):
