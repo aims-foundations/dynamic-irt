@@ -109,6 +109,7 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
             question_content_map = {
                 f"Question {idx + 1}": (q["name"], q["max_score"])
                 for idx, q in enumerate(data_q["train"])
+                if "max_scores" in q
             }
             for answer in data_s["train"]:
                 s_idx = student_id_to_index[answer["id"]]

@@ -3,37 +3,8 @@ This file provides support functions.
 """
 
 import json
-import os
-import random
-from datetime import datetime
-
-import matplotlib.pyplot as plt
 import numpy as np
-import torch
-
-
-STARTING_TIME = datetime.strptime("1/9/23, 00:00:00", "%d/%m/%y, %H:%M:%S")
-
-
-def parse_time(time_str):
-    # Parsing the string into a datetime object
-    parsed_datetime = datetime.strptime(time_str, "%d/%m/%y, %H:%M:%S") - STARTING_TIME
-    # Convert to days
-    return parsed_datetime.total_seconds() / 86400
-
-
-def ensure_dir(dir_path):
-    os.makedirs(dir_path, exist_ok=True)
-
-
-def set_seed(seed):
-    random.seed(seed)
-    # torch.backends.cudnn.deterministic=True
-    # torch.backends.cudnn.benchmark = False
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.cuda.manual_seed_all(seed)
+import matplotlib.pyplot as plt
 
 
 def parse_score(name):
