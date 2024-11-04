@@ -383,5 +383,10 @@ if __name__ == "__main__":
                 list_zs,
                 f"results/{args.course_name}_seed{args.seed}/ess_zs_by_iter_{epoch + 1}.pt",
             )
+            
+            # Delete old saved files
+            if epoch + 1 > 5000:
+                os.remove(f"results/{args.course_name}_seed{args.seed}/ess_thetas_by_iter_{epoch + 1 - 5000}.pt")
+                os.remove(f"results/{args.course_name}_seed{args.seed}/ess_zs_by_iter_{epoch + 1 - 5000}.pt")
 
     # wandb.finish()
