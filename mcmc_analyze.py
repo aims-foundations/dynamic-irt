@@ -30,22 +30,21 @@ if __name__ == "__main__":
         os.path.join(second_folder, f"ess_thetas_by_iter_{args.iteration}.pt")
     )
 
-    total_students = len(theta_1[0])
+    total_thetas = len(theta_1[0])
     # Randomly select n_theta thetas from total_thetas without replacement
-    selected_students = random.sample(range(total_students), args.n_theta)
+    selected_thetas = random.sample(range(total_thetas), args.n_theta)
 
-    for sidx in tqdm(selected_students, desc="Drawing theta distributions"):
-        thidx = random.randint(0, len(theta_1[0][0]))
-        list_theta_1 = [theta_1[i][sidx][thidx] for i in range(2000, len(theta_1))]
-        list_theta_2 = [theta_2[i][sidx][thidx] for i in range(2000, len(theta_2))]
+    for thidx in tqdm(selected_thetas, desc="Drawing theta distributions"):
+        list_theta_1 = [theta_1[i][thidx] for i in range(2000, len(theta_1))]
+        list_theta_2 = [theta_2[i][thidx] for i in range(2000, len(theta_2))]
 
         # Draw theta_1 and theta_2 distributions on the same plot with different colors
         plt.hist(list_theta_1, bins=50, alpha=0.5, color="blue")
         plt.hist(list_theta_2, bins=50, alpha=0.5, color="red")
         plt.xlabel(r"$\theta$")
         plt.ylabel("Frequency")
-        plt.title(f"Student {sidx} - " + r"$\theta$" + f" {thidx} Distribution")
+        plt.title(r"$\theta$" + f" {thidx} Distribution")
         plt.savefig(
-            f"plots/student{sidx}_theta{thidx}_iter{args.iteration}.png", dpi=300
+            f"plots/theta{thidx}_iter{args.iteration}.png", dpi=300
         )
         plt.close()
