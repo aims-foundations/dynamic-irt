@@ -384,9 +384,13 @@ if __name__ == "__main__":
                 f"results/{args.course_name}_seed{args.seed}/ess_zs_by_iter_{epoch + 1}.pt",
             )
             
+            # Clear thetas and zs
+            list_thetas = []
+            list_zs = []
+            
             # Delete old saved files
-            if epoch + 1 > 5000:
-                os.remove(f"results/{args.course_name}_seed{args.seed}/ess_thetas_by_iter_{epoch + 1 - 5000}.pt")
-                os.remove(f"results/{args.course_name}_seed{args.seed}/ess_zs_by_iter_{epoch + 1 - 5000}.pt")
+            # if epoch + 1 > 5000:
+            #     os.remove(f"results/{args.course_name}_seed{args.seed}/ess_thetas_by_iter_{epoch + 1 - 5000}.pt")
+            #     os.remove(f"results/{args.course_name}_seed{args.seed}/ess_zs_by_iter_{epoch + 1 - 5000}.pt")
 
     # wandb.finish()
