@@ -328,11 +328,10 @@ if __name__ == "__main__":
         )
 
         # Construct zs
-        # constructed_z = torch.zeros((total_z,), device=device)
-        # constructed_z[all_squidx] = next_z
-        # list_zs.append(constructed_z.cpu())
-        # list_zs.append(constructed_z.cpu())
-        list_zs.append(next_z.cpu())
+        constructed_z = torch.zeros((total_z,), device=device)
+        constructed_z[all_squidx] = next_z
+        list_zs.append(constructed_z.to(torch.bfloat16).cpu())
+        # list_zs.append(next_z.cpu())
 
         # Sampling for theta
         tmz = previous_thetas[:train_test_split_idx] - next_z[:train_test_split_idx]
@@ -367,7 +366,7 @@ if __name__ == "__main__":
         #     st_theta[list_saidx[sidx]] = next_theta[student_idxs == sidx]
         #     constructed_theta.append(st_theta.cpu())
         # list_thetas.append(constructed_theta)
-        list_thetas.append(next_theta.cpu())
+        list_thetas.append(next_theta.to(torch.bfloat16).cpu())
 
         # Update thetas and zs
         previous_thetas = next_theta
