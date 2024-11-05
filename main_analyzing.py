@@ -2,16 +2,17 @@
 Run this file to get students' score analysis.
 """
 
-import os
-import json
 import argparse
+import json
+import os
+
 from utils import (
-    process_scores_per_question,
-    plot_scores_per_question,
-    process_scores_all_questions,
     plot_scores_all_questions,
-    process_scores_per_week,
+    plot_scores_per_question,
     plot_scores_per_week,
+    process_scores_all_questions,
+    process_scores_per_question,
+    process_scores_per_week,
 )
 
 

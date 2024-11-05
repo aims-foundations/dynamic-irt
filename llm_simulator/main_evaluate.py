@@ -4,7 +4,8 @@ import random
 
 import numpy as np
 import torch
-from datasets import load_dataset
+import wandb
+from datasets import load_dataset, load_metric
 from openai import OpenAI
 from tqdm import tqdm
 from transformers import AutoTokenizer, GenerationConfig
@@ -31,7 +32,7 @@ def compute_perplexity(model, tokenizer, sample, sampling_params={}):
         sample["instruction"],
         sample["output"],
     )
-    if len(tokenizer.encode(prompt)) > 131000:
+    if len(tokenizer.encode(prompt)) > 131071:
         return None
 
     completion = infer_completion(model, prompt, sampling_params)
@@ -45,8 +46,10 @@ def compute_perplexity(model, tokenizer, sample, sampling_params={}):
     for i, _ in enumerate(output_tokens):
         token_prob = prompt_logprobs[total_tokens - i - 1]
         if (-list(token_prob.values())[0].logprob) == np.inf:
-            continue
-        list_logprobs.append(-list(token_prob.values())[0].logprob)
+            # continue
+            list_logprobs.append(10)
+        else:
+            list_logprobs.append(-list(token_prob.values())[0].logprob)
 
     list_logprobs = np.array(list_logprobs)
 
@@ -60,17 +63,20 @@ def infer_completion(model, prompt, sampling_params={}):
 
 
 if __name__ == "__main__":
+    wandb.init()
+
     parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str)
     parser.add_argument("--cls", type=str, nargs="+")
     parser.add_argument(
         "--dataset",
         type=str,
-        default="stair-lab/dsa_hk231_wtc_per_student_sft_lf_splited",
+        default="stair-lab/dsa_hk231_v3_per_student_sft_lf_splited",
     )
     args = parser.parse_args()
 
     for cls in args.cls:
-        model_id = f"saves/{cls}"
+        model_id = args.model
         # model_id = "meta-llama/Llama-3.2-3B-Instruct"
 
         model = LLM(model_id, dtype=torch.float16)
@@ -84,14 +90,14 @@ if __name__ == "__main__":
             top_k=1,
             prompt_logprobs=1,
             max_tokens=1,
-            truncate_prompt_tokens=130000,
+            truncate_prompt_tokens=131072,
             skip_special_tokens=False,
             include_stop_str_in_output=True,
         )
 
-        dataset = load_dataset(args.dataset, split=cls + "_test")
+        dataset = load_dataset(args.dataset, split=cls)
 
-        # Random sampling for choosing 100 samples to evaluate
+        # Random sampling for choosing 1000 samples to evaluate
         chosen_idxs = random.choices(list(range(len(dataset))), k=1000)
         eval_dataset = dataset.select(chosen_idxs)
 
@@ -105,14 +111,21 @@ if __name__ == "__main__":
                 list_perplexity.append(preplexity)
 
             if (i + 1) % 50 == 0:
+                wandb.log(
+                    {"mean_perplexity": sum(list_perplexity) / len(list_perplexity)}
+                )
                 print(f"Mean perplexity: {sum(list_perplexity) / len(list_perplexity)}")
 
         print(f"Class: {cls}")
+        wandb.log({"mean_perplexity": sum(list_perplexity) / len(list_perplexity)})
         print(f"Mean perplexity: {sum(list_perplexity) / len(list_perplexity)}")
 
+        model_id = model_id.replace("/", "_")
         # Save to file
-        with open(f"results/perplexity_{cls}.txt", "w") as f:
+        with open(f"results/perplexity_{model_id}_{cls}.txt", "w") as f:
             f.write("\n".join([str(x) for x in list_perplexity]))
             f.write(
                 "\n" + f"Mean perplexity: {sum(list_perplexity) / len(list_perplexity)}"
             )
+
+    wandb.finish()

@@ -17,6 +17,7 @@ def preprocess_answer(answer):
 
 def process_one_student(student_answer):
     # for si, student_answer in enumerate(tqdm(student_answers, desc="Testing student")):
+    list_errors = []
     for qi, question in enumerate(student_answer["response_history"]):
         if "." in question["question"]:
             dotidx = question["question"].rfind(".")
@@ -55,12 +56,23 @@ def process_one_student(student_answer):
                     warnings.warn(
                         f"Score mismatch for {student_answer['id']}, question {qidx}. Expected: {attempt['score']}, Got: {student_results['score']}."
                     )
+                    list_errors.append(
+                        abs(float(attempt["score"]) - student_results["score"])
+                    )
+                else:
+                    list_errors.append(0)
 
                 student_answer["response_history"][qi]["results"][ai]["testcases"] = (
                     student_results["testcases"]
                 )
             else:
                 student_answer["response_history"][qi]["results"][ai]["testcases"] = []
+
+    if len(list_errors) == 0:
+        return 0
+
+    print("error:", sum(list_errors) / len(list_errors))
+    return sum(list_errors) / len(list_errors)
 
 
 if __name__ == "__main__":
@@ -91,6 +103,8 @@ if __name__ == "__main__":
     list_evaluators = []
 
     # >>> weeks x questions
+    list_res = []
+
     for wi, week in enumerate(weeks[args.start_week - 1 :]):
         print("Running week", wi)
         list_evaluators.append({})
@@ -149,6 +163,7 @@ if __name__ == "__main__":
                 # Retrieve results as they complete
                 for future in tqdm(futures, desc="Testing student"):
                     result = future.result()
+                    list_res.append(result)
 
                 wait(futures, return_when=ALL_COMPLETED)
 
@@ -161,3 +176,5 @@ if __name__ == "__main__":
                     "w",
                 ),
             )
+
+            print("Mean error:", sum(list_res) / len(list_res))

@@ -60,7 +60,7 @@ def parallel_compile(codes, temp_dir, max_workers=4):
     return executables
 
 
-def run_executable(executable, std_in, timeout=5):
+def run_executable(executable, std_in, timeout=10):
     """
     Runs an executable with a timeout and captures its output.
 

@@ -4,14 +4,26 @@ import os
 import pickle
 from datetime import datetime
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from config import CLASSES, FEEDBACK_INST, SYSTEM_PROMPT, WEEK_FILES
+
+import torch
+
+from config import (
+    CLASSES,
+    EXAM_INST,
+    FEEDBACK_INST,
+    QUESTION_INST,
+    SYSTEM_PROMPT,
+    WEEK_FILES,
+)
 from datasets import concatenate_datasets, Dataset, DatasetDict
 from huggingface_hub import snapshot_download
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 from transformers import AutoTokenizer
+from utils import remove_spaces, string_diff
 
 
 def parse_time(time_str):
@@ -42,7 +54,7 @@ def format_questions(list_questions):
                 )
         else:
             formated_questions.append(
-                f"Question {qi+1}: " + format_question(q["question"])
+                remove_spaces(f"Question {qi+1}: " + format_question(q["question"]))
             )
     return "\n\n".join(formated_questions)
 
@@ -60,19 +72,18 @@ def get_question_names(list_questions):
 def format_response(response):
     for prefix in ["Saved: ", "Prechecked: ", "Submit: "]:
         response = response.replace(prefix, "")
-    return response
+    return remove_spaces(response)
 
 
 def format_chat_template(tokenizer, exams, exercises, style="trl"):
     ex_questions, ex_responses = exams
     questions, responses = exercises
     # questions: List[str]
-    # responses: List[List[List[str]]]. Shape: week x (qidx,....)
+    # responses: List[List[List[str]]]
 
     conversation = [{"role": "system", "content": SYSTEM_PROMPT}]
     conv_weeks = [1]
     conv_question_names = [[]]
-    testcase_scores = [[]]
     last_feedback = ""
     for wi, (w_ex_questions, w_ex_responses, w_questions, w_responses) in enumerate(
         zip(ex_questions, ex_responses, questions, responses)
@@ -87,14 +98,13 @@ def format_chat_template(tokenizer, exams, exercises, style="trl"):
                         last_feedback
                         + "Here are the exam questions.\n\n"
                         + format_questions(w_ex_questions)
-                        + "Please write your answer for the above question in C++."
+                        + "\nPlease write your answer to the above question in C++. If you retry a question, only return the modifications to the prior answer."
                     ),
                 }
             )
             last_feedback = ""
             conv_weeks.append(wi + 1)
             conv_question_names.append(get_question_names(w_ex_questions))
-            testcase_scores.append(res[1]["testcases"])
 
             if len(w_ex_responses) == 0:
                 conversation.append(
@@ -105,54 +115,78 @@ def format_chat_template(tokenizer, exams, exercises, style="trl"):
                 )
                 conv_weeks.append(wi + 1)
                 conv_question_names.append([])
-                testcase_scores.append([])
             else:
+                last_answer = {}
                 for ridx, res in enumerate(w_ex_responses):
-                    # res: 0: qidx, 1: student_exm, 2: exam_scores, 3: exam_tc_scores
-                    conversation.append(
-                        {
-                            "role": "assistant",
-                            "content": f"Answer for question {res[0]}:\n"
-                            + format_response(res[1]["action"]),
-                        }
-                    )
+                    fres = format_response(res[1]["action"])
+                    if res[0] not in last_answer:
+                        conversation.append(
+                            {
+                                "role": "assistant",
+                                "content": f"First answer for question {res[0]}:\n"
+                                + fres,
+                            }
+                        )
+                    else:
+                        ans_diff = string_diff(tokenizer, last_answer[res[0]], fres)
+                        conversation.append(
+                            {
+                                "role": "assistant",
+                                "content": f"Editted answer for question {res[0]}:\n"
+                                + "\n".join(
+                                    [
+                                        remove_spaces(
+                                            "REPLACE\n"
+                                            + x[0]
+                                            + "\nWITH\n"
+                                            + x[1]
+                                            + "\nEND\n"
+                                        )
+                                        for x in ans_diff
+                                    ]
+                                ),
+                            }
+                        )
+
+                    last_answer[res[0]] = fres
                     conv_weeks.append(wi + 1)
                     conv_question_names.append([])
-                    testcase_scores.append([])
                     if ridx < len(w_ex_responses) - 1:
                         conversation.append(
                             {
                                 "role": "user",
-                                "content": FEEDBACK_INST.format(score=round(res[2], 2)),
+                                "content": FEEDBACK_INST.format(
+                                    score=round(res[-1], 2)
+                                ),
                             }
                         )
                         conv_weeks.append(wi + 1)
                         conv_question_names.append([])
-                        testcase_scores.append(res[1]["testcases"])
-
                     else:
                         last_ex_feedback = (
-                            FEEDBACK_INST.format(score=round(res[2], 2)) + "\n\n"
+                            FEEDBACK_INST.format(score=round(res[-1], 2)) + "\n\n"
                         )
-
-        ### Week exercises
-        conversation.append(
-            {
-                "role": "user",
-                "content": (
-                    last_ex_feedback
-                    + "Here are the exercise questions for practice.\n\n"
-                    + format_questions(w_questions)
-                    + "Please write your answer for the above question in C++."
-                ),
-            }
-        )
-        conv_weeks.append(wi + 1)
-        conv_question_names.append(get_question_names(w_questions))
-        if last_ex_feedback:
-            testcase_scores.append(res[1]["testcases"])
+        if wi >= 2:
+            conversation.append({"role": "user", "content": last_ex_feedback})
+            conversation.append({"role": "assistant", "content": ""})
+            conv_weeks.append(wi + 1)
+            conv_question_names.append(get_question_names(w_questions))
+            break
         else:
-            testcase_scores.append([])
+            # Week exercises
+            conversation.append(
+                {
+                    "role": "user",
+                    "content": (
+                        last_ex_feedback
+                        + "Here are the exercise questions for practice.\n\n"
+                        + format_questions(w_questions)
+                        + "\nPlease write your answer to the above question in C++. If you retry a question, only return the modifications to the prior answer."
+                    ),
+                }
+            )
+            conv_weeks.append(wi + 1)
+            conv_question_names.append(get_question_names(w_questions))
 
         if len(w_responses) == 0:
             conversation.append(
@@ -163,45 +197,71 @@ def format_chat_template(tokenizer, exams, exercises, style="trl"):
             )
             conv_weeks.append(wi + 1)
             conv_question_names.append([])
-            testcase_scores.append([])
         else:
+            last_answer = {}
             for ridx, res in enumerate(w_responses):
-                # res: 0: qidx, 1: student_exm, 2: exam_scores, 3: exam_tc_scores
-                conversation.append(
-                    {
-                        "role": "assistant",
-                        "content": f"Answer for question {res[0]}:\n"
-                        + format_response(res[1]["action"]),
-                    }
-                )
+                fres = format_response(res[1]["action"])
+                if res[0] not in last_answer:
+                    conversation.append(
+                        {
+                            "role": "assistant",
+                            "content": f"First answer for question {res[0]}:\n" + fres,
+                        }
+                    )
+                else:
+                    ans_diff = string_diff(tokenizer, last_answer[res[0]], fres)
+                    conversation.append(
+                        {
+                            "role": "assistant",
+                            "content": f"Editted answer for question {res[0]}:\n"
+                            + "\n".join(
+                                [
+                                    remove_spaces(
+                                        "REPLACE\n"
+                                        + x[0]
+                                        + "\nWITH\n"
+                                        + x[1]
+                                        + "\nEND\n"
+                                    )
+                                    for x in ans_diff
+                                ]
+                            ),
+                        }
+                    )
+
+                last_answer[res[0]] = fres
                 conv_weeks.append(wi + 1)
                 conv_question_names.append([])
-                testcase_scores.append([])
                 if ridx < len(w_responses) - 1:
                     conversation.append(
                         {
                             "role": "user",
-                            "content": FEEDBACK_INST.format(score=round(res[2], 2)),
+                            "content": FEEDBACK_INST.format(score=round(res[-1], 2)),
                         }
                     )
                     conv_weeks.append(wi + 1)
                     conv_question_names.append([])
-                    testcase_scores.append(res[1]["testcases"])
-
                 else:
                     last_feedback = (
-                        FEEDBACK_INST.format(score=round(res[2], 2)) + "\n\n"
+                        FEEDBACK_INST.format(score=round(res[-1], 2)) + "\n\n"
                     )
 
     if style == "easycontext":
         prompts = tokenizer.apply_chat_template(
             conversation, tokenize=True, add_special_tokens=False
         )
+        token_length = len(prompts)
+
     elif style == "trl":
         prompts = tokenizer.apply_chat_template(
             conversation, tokenize=True, add_special_tokens=False
         )
     elif style == "lf":
+        prompts = tokenizer.apply_chat_template(
+            conversation, tokenize=True, add_special_tokens=False
+        )
+        token_length = len(prompts)
+
         prompts = {
             "system": [],
             "instruction": [],
@@ -209,7 +269,6 @@ def format_chat_template(tokenizer, exams, exercises, style="trl"):
             "history": [],
             "week": [],
             "question_name": [],
-            "testcase_scores": [],
         }
         history = []
         for idx in range(1, len(conversation), 2):
@@ -219,12 +278,11 @@ def format_chat_template(tokenizer, exams, exercises, style="trl"):
             prompts["output"].append(conversation[idx + 1]["content"])
             prompts["week"].append(conv_weeks[idx])
             prompts["question_name"].append(conv_question_names[idx])
-            prompts["testcase_scores"].append(testcase_scores[idx])
             history.append(
                 [conversation[idx]["content"], conversation[idx + 1]["content"]]
             )
 
-    return prompts
+    return prompts, token_length
 
 
 if __name__ == "__main__":
@@ -258,6 +316,9 @@ if __name__ == "__main__":
 
     final_ds = {}
     list_classes = CLASSES[args.course_name]
+    list_token_length = []
+    combined_dataset = []
+
     for cls in tqdm(list_classes, desc="Processing"):
         print(f"*** CLASS {cls} ***")
 
@@ -436,7 +497,6 @@ if __name__ == "__main__":
                 "history": [],
                 "week": [],
                 "question_name": [],
-                "testcase_scores": [],
             }
         else:
             list_prompts = []
@@ -481,7 +541,6 @@ if __name__ == "__main__":
                 # Score can be accessd by student_ans[question][attempt]["score"]
                 # Score must be normalized to [0, 1] by max_score, which can be accessed by week_questions[question]["max_score"]
                 ques_scores = {}
-                ques_tc_scores = {}
                 for qidx, res in student_ans.items():
                     if isinstance(week_questions[int(float(qidx)) - 1], list):
                         # Set random question
@@ -493,19 +552,15 @@ if __name__ == "__main__":
                         max_score = 1
 
                     score = []
-                    tc_score = []
                     for attempt in student_ans[qidx]:
                         # score.append(float(attempt["score"]) / max_score)
                         if len(attempt["testcases"]) == 0:
-                            tc_score.append([])
                             score.append(0.0)
                         else:
-                            tc_score.append(attempt["testcases"])
                             score.append(
                                 sum(attempt["testcases"]) / len(attempt["testcases"])
                             )
 
-                    ques_tc_scores[qidx] = tc_score
                     ques_scores[qidx] = score
 
                 # Prepare scores
@@ -529,29 +584,23 @@ if __name__ == "__main__":
                 # Score can be accessed by student_exm[question][attempt]["score"]
                 # Score must be normalized to [0, 1] by max_score, which can be accessed by week_exms[question]["max_score"]
                 exam_scores = {}
-                exam_tc_scores = {}
                 for qidx, res in student_exm.items():
                     if isinstance(week_exms[int(float(qidx)) - 1], list):
                         # Set random question
                         max_score = week_exms[int(float(qidx)) - 1][0]["max_score"]
                     else:
                         max_score = week_exms[int(float(qidx)) - 1]["max_score"]
-
                     score = []
-                    tc_score = []
                     for attempt in student_exm[qidx]:
                         # score.append(float(attempt["score"]) / max_score)
                         if len(attempt["testcases"]) == 0:
-                            tc_score.append([])
                             score.append(0.0)
                         else:
-                            tc_score.append(attempt["testcases"])
                             score.append(
                                 sum(attempt["testcases"]) / len(attempt["testcases"])
                             )
 
                     exam_scores[qidx] = score
-                    exam_tc_scores[qidx] = tc_score
 
                 # Convert student_ans[question][attempt]["time"] from string to datetime
                 for res in student_ans.values():
@@ -576,23 +625,13 @@ if __name__ == "__main__":
                 for qidx in student_ans:
                     for aidx in range(len(student_ans[qidx])):
                         student_ans_flat.append(
-                            (
-                                qidx,
-                                student_ans[qidx][aidx],
-                                ques_scores[qidx][aidx],
-                                ques_tc_scores[qidx][aidx],
-                            )
+                            (qidx, student_ans[qidx][aidx], ques_scores[qidx][aidx])
                         )
 
                 for qidx in student_exm:
                     for aidx in range(len(student_exm[qidx])):
                         student_exm_flat.append(
-                            (
-                                qidx,
-                                student_exm[qidx][aidx],
-                                exam_scores[qidx][aidx],
-                                exam_tc_scores[qidx][aidx],
-                            )
+                            (qidx, student_exm[qidx][aidx], exam_scores[qidx][aidx])
                         )
 
                 # Sort the answers and scores by the student_ans[question][attempt]["time"]
@@ -607,16 +646,12 @@ if __name__ == "__main__":
                 exam_answer_all_weeks.append(student_exm_flat)
 
             # Prepare the data for training
-            prompt = format_chat_template(
+            prompt, token_length = format_chat_template(
                 tokenizer,
                 exams=(exams_all_weeks, exam_answer_all_weeks),
                 exercises=(questions_all_weeks, answer_all_weeks),
                 style=args.style,
             )
-            # pickle.dump(
-            #     [(exams_all_weeks, exam_answer_all_weeks), (questions_all_weeks, answer_all_weeks)],
-            #     open(f"student_data/{cls}/{stid}.pkl", "wb")
-            # )
             if args.style == "lf":
                 list_prompts["system"].extend(prompt["system"])
                 list_prompts["instruction"].extend(prompt["instruction"])
@@ -624,9 +659,11 @@ if __name__ == "__main__":
                 list_prompts["history"].extend(prompt["history"])
                 list_prompts["week"].extend(prompt["week"])
                 list_prompts["question_name"].extend(prompt["question_name"])
-                list_prompts["testcase_scores"].extend(prompt["testcase_scores"])
             else:
                 list_prompts.append(prompt)
+
+            combined_dataset.append(prompt)
+            list_token_length.append(token_length)
 
         if args.style == "easycontext":
             cls_ds = Dataset.from_dict({"input_ids": list_prompts})
@@ -637,16 +674,47 @@ if __name__ == "__main__":
             cls_ds = Dataset.from_pandas(df)
         final_ds[cls] = cls_ds
 
+    # Draw histogram of token length
+    plt.hist(list_token_length, bins=20)
+    plt.xlabel("Token Length")
+    plt.ylabel("Number of Students")
+    plt.title(f"Token Length")
+    plt.savefig(f"token_length.png")
+    plt.close()
+
     # Create final dataset and push to hf hub
-    all_ds = concatenate_datasets(list(final_ds.values()))
-    final_ds["all_cls"] = all_ds
+    # all_ds = concatenate_datasets(list(final_ds.values()))
+
+    # Sort dataset by context length
+    sorted_idx = torch.argsort(torch.tensor(list_token_length)).tolist()
+    all_ds = {
+        "system": [],
+        "instruction": [],
+        "output": [],
+        "history": [],
+        "week": [],
+        "question_name": [],
+    }
+    for sidx in sorted_idx:
+        student_ds = combined_dataset[sidx]
+        all_ds["system"].extend(student_ds["system"])
+        all_ds["instruction"].extend(student_ds["instruction"])
+        all_ds["output"].extend(student_ds["output"])
+        all_ds["history"].extend(student_ds["history"])
+        all_ds["week"].extend(student_ds["week"])
+        all_ds["question_name"].extend(student_ds["question_name"])
+    all_ds = pd.DataFrame(all_ds)
+    all_ds = Dataset.from_pandas(all_ds)
+
+    # Create final dataset
+    final_ds["train"] = all_ds
     final_ds = DatasetDict(final_ds)
 
     if args.style == "lf":
-        repo_name = f"stair-lab/{args.course_name}_wtc_per_student_sft_lf"
+        repo_name = f"stair-lab/{args.course_name}_v3_per_student_sft_lf"
     elif args.style == "trl":
-        repo_name = f"stair-lab/{args.course_name}_wtc_per_student_sft"
+        repo_name = f"stair-lab/{args.course_name}_v3_per_student_sft"
     elif args.style == "easycontext":
-        repo_name = f"stair-lab/{args.course_name}_wtc_per_student_sft_tokenized"
+        repo_name = f"stair-lab/{args.course_name}_v3_per_student_sft_tokenized"
 
     final_ds.push_to_hub(repo_name)
