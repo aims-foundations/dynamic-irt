@@ -1,0 +1,12 @@
+### model
+model_name_or_path: meta-llama/Llama-3.2-3B-Instruct
+adapter_name_or_path: saves/CC01
+template: llama3
+finetuning_type: lora
+infer_dtype: bfloat16
+
+### export
+export_dir: saves/CC01
+export_size: 5
+export_device: cpu
+export_legacy_format: false

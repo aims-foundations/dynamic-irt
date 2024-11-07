@@ -15,12 +15,20 @@ For data visualization, please run the below command.
 python main_analyzing.py [-h] [--course_name COURSE_NAME] [--class_name CLASS_NAME]
 ```
 
+## List of supported courses and classes
+- DSA-HK231
+    + L09
+    + DT01
+
+## RSSM
 For fitting the Dynamic IRT model, run the following command:
 ```bash
 python process_data.py
 python main_ess.py
 ```
 
+## LLM Simulator
+First, we train LLM using SFT.
 To supervised-finetune the language model, run the following command:
 ```bash
 trl sft --config configs/sft_dsa_hk231.yaml \
