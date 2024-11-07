@@ -5,8 +5,8 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torchmetrics.regression import SpearmanCorrCoef
 from huggingface_hub import snapshot_download
+from torchmetrics.regression import SpearmanCorrCoef
 from tqdm import tqdm
 from tueplots import bundles, constants
 from utils import ensure_dir, set_seed
@@ -147,14 +147,21 @@ if __name__ == "__main__":
     unique_time_obs = []
     for tidx, time_ob in enumerate(time_obs):
         unique_time_obs.append(time_ob.unique()[:-1].cpu().numpy())
-    student_idxs = pickle.load(open(os.path.join(first_folder, "student_idxs.pkl"), "rb"))
-    list_saidx2idx = pickle.load(open(os.path.join(first_folder, "list_saidx2aidx.pkl"), "rb"))
-    
+    student_idxs = pickle.load(
+        open(os.path.join(first_folder, "student_idxs.pkl"), "rb")
+    )
+    list_saidx2idx = pickle.load(
+        open(os.path.join(first_folder, "list_saidx2aidx.pkl"), "rb")
+    )
+
     # student_thetas = [th[student_idxs == picked_sidx][list_saidx2idx[picked_sidx]].float().tolist() for th in thetas]
     student_thetas = [th[student_idxs == picked_sidx].float().tolist() for th in thetas]
-    
+
     # Save thetas
-    with open(f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_thetas.pkl", "wb") as f:
+    with open(
+        f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_thetas.pkl",
+        "wb",
+    ) as f:
         pickle.dump(student_thetas, f)
     # exit(0)
     student_thetas = np.array(student_thetas)
@@ -173,17 +180,21 @@ if __name__ == "__main__":
     # plt.title(f"Student {picked_sidx} theta plot")
     # plt.savefig(f"plots/student_{picked_sidx}_theta_plot_seed{args.seed}.png", dpi=300)
     # plt.close()
-    
+
     # Compute the Spearman correlation coefficient
     print("Computing Spearman correlation coefficient")
     spearman = SpearmanCorrCoef()
     spearman_value = spearman(
-        torch.tensor(student_thetas_mean, device=device), 
-        torch.tensor(student_y, device=device)[list_saidx2idx[picked_sidx]]
+        torch.tensor(student_thetas_mean, device=device),
+        torch.tensor(student_y, device=device)[list_saidx2idx[picked_sidx]],
     )
-    print(f"Student {picked_sidx} Spearman correlation coefficient: {spearman_value:.2f}")
+    print(
+        f"Student {picked_sidx} Spearman correlation coefficient: {spearman_value:.2f}"
+    )
     fig, ax = spearman.plot()
-    plt.savefig(f"plots/student_{picked_sidx}_spearman_plot_seed{args.seed}.png", dpi=300)
+    plt.savefig(
+        f"plots/student_{picked_sidx}_spearman_plot_seed{args.seed}.png", dpi=300
+    )
 
     # Load zs
     print("Loading zs")

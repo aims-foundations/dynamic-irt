@@ -1,10 +1,10 @@
 import json
 import os
+import random
 import re
 import time
-from urllib.parse import parse_qs, unquote, urlparse, urlsplit
-import random
 from datetime import datetime
+from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
 from Levenshtein import distance
 
@@ -22,8 +22,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 STARTING_TIME = datetime.strptime("1/9/23, 00:00:00", "%d/%m/%y, %H:%M:%S")
 
+
 def compute_ed(original, list_str):
     return [distance(original, x) for x in list_str]
+
 
 def parse_time(time_str):
     # Parsing the string into a datetime object

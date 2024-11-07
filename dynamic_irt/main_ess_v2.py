@@ -12,15 +12,16 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
+from botorch.fit import fit_gpytorch_model
+from botorch.models import SingleTaskGP
+from gpytorch.kernels import RBFKernel, ScaleKernel
+from gpytorch.means import ConstantMean
+from gpytorch.mlls import ExactMarginalLogLikelihood
+
 # from gpytorch.distributions import MultivariateNormal
 # from gpytorch.kernels import RBFKernel, ScaleKernel
 from huggingface_hub import snapshot_download
 from torch.distributions import Normal
-from botorch.models import SingleTaskGP
-from botorch.fit import fit_gpytorch_model
-from gpytorch.mlls import ExactMarginalLogLikelihood
-from gpytorch.kernels import RBFKernel, ScaleKernel
-from gpytorch.means import ConstantMean
 from torch.distributions.bernoulli import Bernoulli
 from tqdm import tqdm
 from tueplots import bundles
@@ -169,7 +170,7 @@ if __name__ == "__main__":
     y_obs = y_obs[first_idx, sorted_idx]
     qidx_obs = qidx_obs[first_idx, sorted_idx]
     time_obs = time_obs[first_idx, sorted_idx]
-    
+
     ######## For testing purpose ########
     # y_obs = y_obs[:2]
     # qidx_obs = qidx_obs[:2]
@@ -202,9 +203,14 @@ if __name__ == "__main__":
         # return MultivariateNormal(
         #     torch.zeros(covar.shape[0], device=device), covariance_matrix=covar
         # )
-        
+
         # Create a GP model
-        gp = SingleTaskGP(time_obs_s, torch.zeros_like(time_obs_s), covar_module=ScaleKernel(RBFKernel()), mean_module=ConstantMean())
+        gp = SingleTaskGP(
+            time_obs_s,
+            torch.zeros_like(time_obs_s),
+            covar_module=ScaleKernel(RBFKernel()),
+            mean_module=ConstantMean(),
+        )
 
         # Fit the model (even though we are not using any data, this is required to initialize the model properly)
         mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
@@ -222,7 +228,11 @@ if __name__ == "__main__":
         if theta_priors[sidx] is None:
             return []
         else:
-            return theta_priors[sidx].posterior(unique_time_obs[sidx][:-1].reshape(-1, 1)).sample()
+            return (
+                theta_priors[sidx]
+                .posterior(unique_time_obs[sidx][:-1].reshape(-1, 1))
+                .sample()
+            )
 
     # Create normal prior distribution for z, where each z_i is corresponding to a testcase in a question
     print("Creating z priors")
@@ -275,19 +285,17 @@ if __name__ == "__main__":
 
     student_idxs = torch.tensor(student_idxs)
     all_squidx = torch.cat(list_sqidx)
-    
+
     # Save student indexes
     with open(
         f"results/{args.course_name}_seed{args.seed}/student_idxs.pkl", "wb"
     ) as f:
         pickle.dump(student_idxs, f)
-        
+
     # Save student saidx indexes
-    with open(
-        f"results/{args.course_name}_seed{args.seed}/list_saidx.pkl", "wb"
-    ) as f:
+    with open(f"results/{args.course_name}_seed{args.seed}/list_saidx.pkl", "wb") as f:
         pickle.dump(list_saidx, f)
-    
+
     # Reverse the attempt indexes of students
     print("Reverse the attempt indexes of students")
     list_saidx2aidx = []
@@ -295,11 +303,11 @@ if __name__ == "__main__":
         if masked_idx[sidx].sum() == 0:
             list_saidx2aidx.append(None)
             continue
-        
+
         saidx2aidx = []
         for aidx in list_saidx[sidx].unique().sort()[0]:
             saidx2aidx.append(torch.where(list_saidx[sidx] == aidx)[0][0])
-            
+
         list_saidx2aidx.append(torch.tensor(saidx2aidx))
 
     # Save attempt indexes
@@ -310,8 +318,12 @@ if __name__ == "__main__":
 
     print("Sampling priors")
     if args.is_continue:
-        list_thetas = torch.load(f"results/{args.course_name}_seed{args.seed}/ess_thetas_by_iter_{args.is_continue}.pt")
-        list_zs = torch.load(f"results/{args.course_name}_seed{args.seed}/ess_zs_by_iter_{args.is_continue}.pt")
+        list_thetas = torch.load(
+            f"results/{args.course_name}_seed{args.seed}/ess_thetas_by_iter_{args.is_continue}.pt"
+        )
+        list_zs = torch.load(
+            f"results/{args.course_name}_seed{args.seed}/ess_zs_by_iter_{args.is_continue}.pt"
+        )
 
         continue_iter = args.is_continue
         previous_thetas = list_thetas[-1].to(device).float()
@@ -337,10 +349,14 @@ if __name__ == "__main__":
             previous_thetas.append(st_theta[list_saidx[sidx]])
         previous_thetas = torch.cat(previous_thetas)
         previous_zs = list_zs[-1][all_squidx]
-        
+
     plt.figure()
-    picked_sidx=415
-    plt.plot(unique_time_obs[picked_sidx][:-1].cpu(), list_thetas[0][picked_sidx].cpu(), alpha=0.3)
+    picked_sidx = 415
+    plt.plot(
+        unique_time_obs[picked_sidx][:-1].cpu(),
+        list_thetas[0][picked_sidx].cpu(),
+        alpha=0.3,
+    )
     # plt.xlabel("Theta index")
     plt.ylabel(r"$\theta$")
     plt.title(f"Student {picked_sidx} theta plot")
@@ -423,11 +439,11 @@ if __name__ == "__main__":
                 list_zs,
                 f"results/{args.course_name}_seed{args.seed}/ess_zs_by_iter_{epoch + 1}.pt",
             )
-            
+
             # Clear thetas and zs
             list_thetas = []
             list_zs = []
-            
+
             # Delete old saved files
             # if epoch + 1 > 5000:
             #     os.remove(f"results/{args.course_name}_seed{args.seed}/ess_thetas_by_iter_{epoch + 1 - 5000}.pt")
