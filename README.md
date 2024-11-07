@@ -1,20 +1,17 @@
-# LMS Crawling
+# Models of Human Learning Dynamic: A Case Study in Learning to Program
 
-## How to use
-First, you need to install required packages.
-```
+First, you need to install the required packages.
+```bash
 pip install -r requirements.txt
 ```
 
-## How to run crawling
-To start crawling, please check the supported course and class, then run below command.
-```
+To start data mining, run the below command:
+```bash
 python main_crawling.py [-h] [--course_name COURSE_NAME] [--class_name CLASS_NAME]
 ```
 
-## Analysis
-For analysis, please run below command.
-```
+For data visualization, please run the below command.
+```bash
 python main_analyzing.py [-h] [--course_name COURSE_NAME] [--class_name CLASS_NAME]
 ```
 
@@ -23,8 +20,16 @@ python main_analyzing.py [-h] [--course_name COURSE_NAME] [--class_name CLASS_NA
     + L09
     + DT01
 
+## RSSM
+For fitting the Dynamic IRT model, run the following command:
+```bash
+python process_data.py
+python main_ess.py
+```
+
 ## LLM Simulator
 First, we train LLM using SFT.
+To supervised-finetune the language model, run the following command:
 ```bash
 trl sft --config configs/sft_dsa_hk231.yaml \
     --use_peft \
