@@ -6,3 +6,4 @@ test.py
 wandb/
 .DS_Store
 myenv/
+results/
