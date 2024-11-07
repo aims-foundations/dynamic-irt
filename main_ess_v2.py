@@ -12,10 +12,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
-from gpytorch.distributions import MultivariateNormal
-from gpytorch.kernels import RBFKernel, ScaleKernel
+# from gpytorch.distributions import MultivariateNormal
+# from gpytorch.kernels import RBFKernel, ScaleKernel
 from huggingface_hub import snapshot_download
 from torch.distributions import Normal
+from botorch.models import SingleTaskGP
+from botorch.fit import fit_gpytorch_model
+from gpytorch.mlls import ExactMarginalLogLikelihood
+from gpytorch.kernels import RBFKernel, ScaleKernel
+from gpytorch.means import ConstantMean
 from torch.distributions.bernoulli import Bernoulli
 from tqdm import tqdm
 from tueplots import bundles
@@ -164,6 +169,13 @@ if __name__ == "__main__":
     y_obs = y_obs[first_idx, sorted_idx]
     qidx_obs = qidx_obs[first_idx, sorted_idx]
     time_obs = time_obs[first_idx, sorted_idx]
+    
+    ######## For testing purpose ########
+    # y_obs = y_obs[:2]
+    # qidx_obs = qidx_obs[:2]
+    # time_obs = time_obs[:2]
+    # n_student = 2
+    #####################################
 
     masked_idx = y_obs != -1
 
@@ -185,12 +197,19 @@ if __name__ == "__main__":
             :-1
         ]  # Remove last element -- it's the empty one
         time_obs_s = time_obs_s.reshape(-1, 1)
-        kernel = ScaleKernel(RBFKernel(length_scale=1.0)).to(device)
-        covar = kernel(time_obs_s)
+        # kernel = RBFKernel(length_scale=10.0).to(device)
+        # covar = kernel(time_obs_s)
+        # return MultivariateNormal(
+        #     torch.zeros(covar.shape[0], device=device), covariance_matrix=covar
+        # )
+        
+        # Create a GP model
+        gp = SingleTaskGP(time_obs_s, torch.zeros_like(time_obs_s), covar_module=ScaleKernel(RBFKernel()), mean_module=ConstantMean())
 
-        return MultivariateNormal(
-            torch.zeros(covar.shape[0], device=device), covariance_matrix=covar
-        )
+        # Fit the model (even though we are not using any data, this is required to initialize the model properly)
+        mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+        fit_gpytorch_model(mll)
+        return gp
 
     for sidx in range(n_student):
         if masked_idx[sidx].sum() == 0:
@@ -203,7 +222,7 @@ if __name__ == "__main__":
         if theta_priors[sidx] is None:
             return []
         else:
-            return theta_priors[sidx].sample()
+            return theta_priors[sidx].posterior(unique_time_obs[sidx][:-1].reshape(-1, 1)).sample()
 
     # Create normal prior distribution for z, where each z_i is corresponding to a testcase in a question
     print("Creating z priors")
@@ -216,13 +235,6 @@ if __name__ == "__main__":
             )
         )
     total_z = len(z_priors)
-
-    # covar = torch.ones((total_testcases,total_testcases), device=device)*1e-10
-    # covar = covar.fill_diagonal_(1)
-    # z_priors = MultivariateNormal(
-    #     torch.zeros(total_testcases, device=device),
-    #     covariance_matrix=covar
-    # )
 
     # Create y_train
     print("Splitting train and test data")
@@ -263,30 +275,49 @@ if __name__ == "__main__":
 
     student_idxs = torch.tensor(student_idxs)
     all_squidx = torch.cat(list_sqidx)
+    
     # Save student indexes
     with open(
         f"results/{args.course_name}_seed{args.seed}/student_idxs.pkl", "wb"
     ) as f:
         pickle.dump(student_idxs, f)
+        
+    # Save student saidx indexes
+    with open(
+        f"results/{args.course_name}_seed{args.seed}/list_saidx.pkl", "wb"
+    ) as f:
+        pickle.dump(list_saidx, f)
+    
+    # Reverse the attempt indexes of students
+    print("Reverse the attempt indexes of students")
+    list_saidx2aidx = []
+    for sidx in range(n_student):
+        if masked_idx[sidx].sum() == 0:
+            list_saidx2aidx.append(None)
+            continue
+        
+        saidx2aidx = []
+        for aidx in list_saidx[sidx].unique().sort()[0]:
+            saidx2aidx.append(torch.where(list_saidx[sidx] == aidx)[0][0])
+            
+        list_saidx2aidx.append(torch.tensor(saidx2aidx))
+
+    # Save attempt indexes
+    with open(
+        f"results/{args.course_name}_seed{args.seed}/list_saidx2aidx.pkl", "wb"
+    ) as f:
+        pickle.dump(list_saidx2aidx, f)
 
     print("Sampling priors")
     if args.is_continue:
-        list_thetas = pickle.load(
-            open(
-                f"results/{args.course_name}_seed{args.seed}/thetas_by_iter_{args.is_continue}.pkl",
-                "rb",
-            )
-        )
-        list_zs = pickle.load(
-            open(
-                f"results/{args.course_name}_seed{args.seed}/zs_by_iter_{args.is_continue}.pkl",
-                "rb",
-            )
-        )
+        list_thetas = torch.load(f"results/{args.course_name}_seed{args.seed}/ess_thetas_by_iter_{args.is_continue}.pt")
+        list_zs = torch.load(f"results/{args.course_name}_seed{args.seed}/ess_zs_by_iter_{args.is_continue}.pt")
 
-        continue_iter = len(list_zs)
-        list_thetas = list_thetas[-1:]
-        list_zs = list_zs[-1:]
+        continue_iter = args.is_continue
+        previous_thetas = list_thetas[-1].to(device).float()
+        previous_zs = list_zs[-1].to(device)[all_squidx].float()
+        list_thetas = []
+        list_zs = []
     else:
         list_thetas = [[sample_theta_prior(tp) for tp in range(n_student)]]
         list_zs = [
@@ -295,17 +326,27 @@ if __name__ == "__main__":
         ]
         continue_iter = 0
 
-    num_theta_per_student = []
-    previous_thetas = []
-    for sidx, st_theta in enumerate(list_thetas[-1]):
-        if list_saidx[sidx] is None:
-            num_theta_per_student.append(0)
-            continue
+        # num_theta_per_student = []
+        previous_thetas = []
+        for sidx, st_theta in enumerate(list_thetas[-1]):
+            if list_saidx[sidx] is None:
+                # num_theta_per_student.append(0)
+                continue
 
-        num_theta_per_student.append(st_theta.shape[0])
-        previous_thetas.append(st_theta[list_saidx[sidx]])
-    previous_thetas = torch.cat(previous_thetas)
-    previous_zs = list_zs[-1][all_squidx]
+            # num_theta_per_student.append(st_theta.shape[0])
+            previous_thetas.append(st_theta[list_saidx[sidx]])
+        previous_thetas = torch.cat(previous_thetas)
+        previous_zs = list_zs[-1][all_squidx]
+        
+    plt.figure()
+    picked_sidx=415
+    plt.plot(unique_time_obs[picked_sidx][:-1].cpu(), list_thetas[0][picked_sidx].cpu(), alpha=0.3)
+    # plt.xlabel("Theta index")
+    plt.ylabel(r"$\theta$")
+    plt.title(f"Student {picked_sidx} theta plot")
+    plt.savefig(f"plots/student_{picked_sidx}_theta_plot_seed{args.seed}.png", dpi=300)
+    plt.close()
+    breakpoint()
 
     for epoch in tqdm(range(continue_iter, args.epochs), desc="Sampling"):
         # Sampling for z

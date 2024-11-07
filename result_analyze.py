@@ -5,6 +5,7 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from torchmetrics.regression import SpearmanCorrCoef
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
 from tueplots import bundles, constants
@@ -12,6 +13,7 @@ from utils import ensure_dir, set_seed
 
 plt.rcParams.update(bundles.iclr2024())
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 if __name__ == "__main__":
     # wandb.init(project="code_insights")
@@ -20,9 +22,8 @@ if __name__ == "__main__":
         "--course_name", help="Course Name", type=str, default="dsa_hk231"
     )
     parser.add_argument("--seed", help="Random seed", type=int, default=42)
-    parser.add_argument("--epochs", help="Number of epochs", type=int, default=100000)
+    parser.add_argument("--iteration", help="# Iteration", type=int, default=100000)
     parser.add_argument("--sidx", help="Student index", type=int, default=0)
-    parser.add_argument("--is_continue", help="Continue sampling", type=int, default=0)
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -124,8 +125,9 @@ if __name__ == "__main__":
             train_test_split_idx += saidx.shape[0]
 
     # Pick a student
+    print("Picking a student")
     picked_sidx = args.sidx + num_train
-    student_y = y_test[args.sidx]
+    student_y = y_test[args.sidx].float().cpu().numpy()
 
     # Draw the student's performance
     plt.figure()
@@ -133,39 +135,61 @@ if __name__ == "__main__":
     # plt.xlabel("Attempt index")
     plt.ylabel("Correctness")
     plt.title(f"Student {picked_sidx} performance")
-    plt.savefig(f"plots/student_{picked_sidx}_performance.png", dpi=300)
+    plt.savefig(f"plots/student_{picked_sidx}_performance_seed{args.seed}.png", dpi=300)
 
     # Load thetas
+    print("Loading thetas")
     first_folder = f"results/{args.course_name}_seed{args.seed}"
     thetas = torch.load(
         os.path.join(first_folder, f"ess_thetas_by_iter_{args.iteration}.pt")
     )
-
-    student_thetas = [th[picked_sidx] for th in thetas[2000:]]
+    time_obs = torch.load("data/time_obs.pt")
+    unique_time_obs = []
+    for tidx, time_ob in enumerate(time_obs):
+        unique_time_obs.append(time_ob.unique()[:-1].cpu().numpy())
+    student_idxs = pickle.load(open(os.path.join(first_folder, "student_idxs.pkl"), "rb"))
+    list_saidx2idx = pickle.load(open(os.path.join(first_folder, "list_saidx2aidx.pkl"), "rb"))
+    
+    # student_thetas = [th[student_idxs == picked_sidx][list_saidx2idx[picked_sidx]].float().tolist() for th in thetas]
+    student_thetas = [th[student_idxs == picked_sidx].float().tolist() for th in thetas]
+    
+    # Save thetas
+    with open(f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_thetas.pkl", "wb") as f:
+        pickle.dump(student_thetas, f)
+    # exit(0)
     student_thetas = np.array(student_thetas)
-
     student_thetas_mean = student_thetas.mean(axis=0)
-    student_thetas_std = student_thetas.std(axis=0)
-
-    # Draw the student's theta plot
-    plt.figure()
-    plt.plot(student_thetas_mean)
-    plt.fill_between(
-        range(len(student_thetas_mean)),
-        student_thetas_mean - student_thetas_std,
-        student_thetas_mean + student_thetas_std,
-        alpha=0.3,
+    # student_thetas_std = student_thetas.std(axis=0)
+    # # Draw the student's theta plot
+    # plt.figure()
+    # plt.plot(unique_time_obs[picked_sidx], student_thetas_mean)
+    # plt.fill_between(
+    #     unique_time_obs[picked_sidx],
+    #     student_thetas_mean - student_thetas_std,
+    #     student_thetas_mean + student_thetas_std,
+    #     alpha=0.3,
+    # )
+    # plt.ylabel(r"$\theta$")
+    # plt.title(f"Student {picked_sidx} theta plot")
+    # plt.savefig(f"plots/student_{picked_sidx}_theta_plot_seed{args.seed}.png", dpi=300)
+    # plt.close()
+    
+    # Compute the Spearman correlation coefficient
+    print("Computing Spearman correlation coefficient")
+    spearman = SpearmanCorrCoef()
+    spearman_value = spearman(
+        torch.tensor(student_thetas_mean, device=device), 
+        torch.tensor(student_y, device=device)[list_saidx2idx[picked_sidx]]
     )
-    # plt.xlabel("Theta index")
-    plt.ylabel(r"$\theta$")
-    plt.title(f"Student {picked_sidx} theta plot")
-    plt.savefig(f"plots/student_{picked_sidx}_theta_plot.png", dpi=300)
-    plt.close()
+    print(f"Student {picked_sidx} Spearman correlation coefficient: {spearman_value:.2f}")
+    fig, ax = spearman.plot()
+    plt.savefig(f"plots/student_{picked_sidx}_spearman_plot_seed{args.seed}.png", dpi=300)
 
     # Load zs
+    print("Loading zs")
     zs = torch.load(os.path.join(first_folder, f"ess_zs_by_iter_{args.iteration}.pt"))
 
-    student_zs = [z[list_sqidx[picked_sidx]] for z in zs[2000:]]
+    student_zs = [z.to(device)[list_sqidx[picked_sidx]].cpu().tolist() for z in zs]
     student_zs = np.array(student_zs)
 
     student_zs_mean = student_zs.mean(axis=0)
@@ -183,5 +207,5 @@ if __name__ == "__main__":
     # plt.xlabel("Testcase index")
     plt.ylabel(r"$z$")
     plt.title(f"Student {picked_sidx} z plot")
-    plt.savefig(f"plots/student_{picked_sidx}_z_plot.png", dpi=300)
+    plt.savefig(f"plots/student_{picked_sidx}_z_plot_seed{args.seed}.png", dpi=300)
     plt.close()
