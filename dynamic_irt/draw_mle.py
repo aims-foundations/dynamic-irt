@@ -102,7 +102,7 @@ if __name__ == "__main__":
     draw_loss(train_losses, test_losses)
 
     data_folder = snapshot_download(
-        repo_id=f"stair-lab/{args.course_name}", repo_type="dataset"
+        repo_id=f"stair-lab/{args.course_name}_wtc", repo_type="dataset"
     )
 
     student_info = pickle.load(open(f"{data_folder}/student_ids.pkl", "rb"))
@@ -129,7 +129,7 @@ if __name__ == "__main__":
     )
     draw_hist(
         class_students,
-        parms_dict["theta1"].cpu().detach().numpy(),
+        torch.sigmoid(parms_dict["theta1"]).cpu().detach().numpy(),
         "theta1_real.png",
         theta=1,
     )

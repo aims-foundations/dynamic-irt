@@ -1,0 +1,11 @@
+program: main_analyzing.py
+project: student-score-analysis
+method: grid
+metric:
+    goal: minimize
+    name: loss
+parameters:
+    course_name: 
+        values: [dsa_hk231]
+    class_name: 
+        values: [L01, L02, L03, L04, L05, L06, L07, L08, L09, L10, L11, L12, L13, L14, L15, CC01, CC02, CC03, DT01, CC04, CC05, CC06, CC07, CC08, CN01, CN02]

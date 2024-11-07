@@ -3,3 +3,9 @@ matplotlib
 tqdm
 webdriver-manager
 wandb
+torch
+numpy
+pandas
+scikit-learn
+datasets
+python-Levenshtein
