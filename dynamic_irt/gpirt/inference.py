@@ -166,6 +166,8 @@ def load_data(data_folder, smoke_test, test_split=0.2):
         unique_time_obs,
         list_saidx,
         all_squidx,
+        student_idxs,
+        list_saidx2aidx,
         train_test_split_idx,
         masked_idx,
     )
@@ -225,6 +227,8 @@ if __name__ == "__main__":
         unique_time_obs,
         list_saidx,
         all_squidx,
+        student_idxs,
+        list_saidx2aidx,
         train_test_split_idx,
         masked_idx,
     ) = load_data(data_folder, args.smoke_test)
@@ -261,6 +265,8 @@ if __name__ == "__main__":
         list_saidx=list_saidx,
         all_squidx=all_squidx,
         unique_time_obs=unique_time_obs,
+        student_idxs=student_idxs,
+        list_saidx2aidx=list_saidx2aidx,
         device=device,
     )
 
