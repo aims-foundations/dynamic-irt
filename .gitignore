@@ -9,6 +9,6 @@ wandb/
 myenv/
 llm_simulator/results/
 llm_simulator/saves/
-simulator_v2/archived/
-simulator_v2/eval_results/
-simulator_v2/saves/
+rssm/archived/
+rssm/eval_results/
+rssm/saves/
