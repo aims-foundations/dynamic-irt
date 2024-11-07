@@ -15,9 +15,10 @@ For data visualization, please run the below command.
 python main_analyzing.py [-h] [--course_name COURSE_NAME] [--class_name CLASS_NAME]
 ```
 
-For fitting the statistical model, run the following command:
+For fitting the Dynamic IRT model, run the following command:
 ```bash
-python main_mle.py
+python process_data.py
+python main_ess.py
 ```
 
 To supervised-finetune the language model, run the following command:

@@ -8,6 +8,7 @@ import Levenshtein
 import numpy as np
 import pandas as pd
 import requests
+import warning
 from bs4 import BeautifulSoup
 from datasets import config, load_dataset
 from huggingface_hub import HfApi
@@ -50,61 +51,11 @@ def find_json_files(repo_id):
     return directory_json_files
 
 
-def preprocess_question(question):
-    answer_phrase = "Answer:(penalty regime:"
-    question_phrase = "Question text "
-    if question_phrase in question:
-        question = question.replace(question_phrase, "").strip()
-
-    if answer_phrase in question:
-        question = question.split(answer_phrase)[0].strip()
-
-    return question
-
-
-def tokenize(text):
-    tokens = text.split()
-    return " ".join(tokens[:150])
-
-
-def edit_distance(s1, s2):
-    if not s1 or not s2:
-        return 0
-    distance = Levenshtein.distance(s1, s2)
-
-    max_len = max(len(s1), len(s2))
-    similarity = 1 - (distance / max_len)
-    return similarity
-
-
-def filter_unique_questions(questions, threshold=0.8):
-    if not questions:
-        return []
-    full_filtered_questions = [questions[0]]
-    filtered_questions = [tokenize(questions.pop(0))]
-
-    while questions:
-        full_current_question = questions[0]
-        current_question = tokenize(questions.pop(0))
-        is_unique = True
-
-        for accepted_question in filtered_questions:
-            if edit_distance(current_question, accepted_question) > threshold:
-                is_unique = False
-                break
-
-        if is_unique:
-            filtered_questions.append(current_question)
-            full_filtered_questions.append(full_current_question)
-
-    return filtered_questions, full_filtered_questions
-
-
 def format_dataset(repo_id, directory_json_files, threshold=0.8):
     question_attempts = []
     student_id_to_index = {}
     correctness = []
-    all_questions = []
+    all_questions = {}
 
     for directory, files in directory_json_files.items():
         for file in files:
@@ -113,8 +64,8 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
             )
 
             for q in data_q["train"]:
-                processed_question = preprocess_question(q["question"])
-                all_questions.append(processed_question)
+                if q["name"] not in all_questions:
+                    all_questions[q["name"]] = q["question"]
 
             data_s = load_dataset(
                 repo_id, data_files=f"{directory}/{file}", field="student_answers"
@@ -133,16 +84,15 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
     student_ids = [{}] * len(student_id_to_index)
     for sid, idx in student_id_to_index.items():
         student_ids[idx] = {"student_id": sid}
-    unique_questions = list(set(all_questions))
-    unique_questions_by_distance, full_unique_questions_by_distance = (
-        filter_unique_questions(unique_questions)
-    )
-    question_index = {qid: idx for idx, qid in enumerate(unique_questions_by_distance)}
+
+    question_index = {qid: idx for idx, qid in enumerate(all_questions)}
+    unique_questions = list(all_questions.values())
 
     N = len(student_id_to_index)
-    Q = len(unique_questions_by_distance)
+    Q = len(unique_questions)
     T = max(question_attempts, default=0)
     correctness_matrix = np.full((N, Q, T), -1).tolist()
+    correctness_bytc_matrix = np.full((N, Q, T), -1).tolist()
     time_matrix = np.full((N, Q, T), "").tolist()
     response_matrix = np.full((N, Q, T), "").tolist()
 
@@ -157,7 +107,7 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
             )
 
             question_content_map = {
-                f"Question {idx + 1}": (q["question"], q["max_scores"])
+                f"Question {idx + 1}": (q["name"], q["max_score"])
                 for idx, q in enumerate(data_q["train"])
                 if "max_scores" in q
             }
@@ -165,47 +115,39 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
                 s_idx = student_id_to_index[answer["id"]]
                 if "class" not in student_ids[s_idx]:
                     student_ids[s_idx]["class"] = directory
+
                 for response_history in answer["response_history"]:
-                    current_question, question_max_score = question_content_map.get(
-                        response_history["question"], ("", 0)
+                    current_question_name, question_max_score = (
+                        question_content_map.get(response_history["question"], ("", 0))
                     )
-                    if not current_question or float(question_max_score) == 0:
+                    if not current_question_name or float(question_max_score) == 0:
                         continue
 
-                    q_idx = None
-                    for idx, q_unique in enumerate(unique_questions_by_distance):
-                        if (
-                            edit_distance(tokenize(current_question), q_unique)
-                            > threshold
-                        ):
-                            q_idx = idx
-                            break
-
-                    if q_idx is None:
-                        continue
+                    q_idx = question_index[current_question_name]
 
                     for t, result in enumerate(response_history["results"][1:-1]):
-                        if result["marks"] == "":
+                        if result["score"] == "":
                             score = 0
-                        elif float(result["marks"]) > float(question_max_score):
-                            break
+                        elif float(result["score"]) > float(question_max_score):
+                            warning.warn("Student score exceeds max score!")
                         else:
-                            score = float(result["marks"]) / float(question_max_score)
+                            score = float(result["score"]) / float(question_max_score)
 
-                        response = ""
-                        if result["action"].startswith("Prechecked"):
-                            response = result["action"].replace("Prechecked: ", "")
-                        elif result["action"].startswith("Submit"):
-                            response = result["action"].replace("Submit: ", "")
+                        response = result["action"]
+                        for prefix in ["Prechecked: ", "Saved: ", "Submit: "]:
+                            if result["action"].startswith(prefix):
+                                response = response.replace(prefix, "")
 
                         correctness_matrix[s_idx][q_idx][t] = score
+                        correctness_bytc_matrix = result["testcase"]
                         time_matrix[s_idx][q_idx][t] = result["time"]
                         response_matrix[s_idx][q_idx][t] = response
 
     return (
         student_ids,
-        full_unique_questions_by_distance,
+        unique_questions,
         correctness_matrix,
+        correctness_bytc_matrix,
         time_matrix,
         response_matrix,
     )
@@ -235,17 +177,25 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    directory_json_files = find_json_files(f"stair-lab/{args.course_name}_records")
-    student_ids, unique_questions, correctness_matrix, time_matrix, response_matrix = (
-        format_dataset(f"stair-lab/{args.course_name}_records", directory_json_files)
+    directory_json_files = find_json_files(f"stair-lab/{args.course_name}_records_wtc")
+    (
+        student_ids,
+        unique_questions,
+        correctness_matrix,
+        correctness_bytc_matrix,
+        time_matrix,
+        response_matrix,
+    ) = format_dataset(
+        f"stair-lab/{args.course_name}_records_wtc", directory_json_files
     )
 
     matrices = [
-        "student_ids.pkl",
-        "unique_questions.pkl",
-        "correctness_matrix.pkl",
-        "time_matrix.pkl",
-        "response_matrix.pkl",
+        "data/student_ids.pkl",
+        "data/unique_questions.pkl",
+        "data/correctness_matrix.pkl",
+        "data/correctness_bytc_matrix.pkl",
+        "data/time_matrix.pkl",
+        "data/response_matrix.pkl",
     ]
 
     with open("data/student_ids.pkl", "wb") as file:
@@ -257,10 +207,13 @@ if __name__ == "__main__":
     with open("data/correctness_matrix.pkl", "wb") as file:
         pickle.dump(correctness_matrix, file)
 
+    with open("data/correctness_bytc_matrix.pkl", "wb") as file:
+        pickle.dump(correctness_matrix, file)
+
     with open("data/time_matrix.pkl", "wb") as file:
         pickle.dump(time_matrix, file)
 
     with open("data/response_matrix.pkl", "wb") as file:
         pickle.dump(response_matrix, file)
 
-    upload_files(f"stair-lab/{args.course_name}", matrices)
+    upload_files(f"stair-lab/{args.course_name}_wtc", matrices)
