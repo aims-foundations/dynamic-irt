@@ -1,0 +1,12 @@
+### model
+model_name_or_path: saves/CC01
+adapter_name_or_path: saves/CC03
+template: llama3
+finetuning_type: lora
+infer_dtype: bfloat16
+
+### export
+export_dir: saves/CC03
+export_size: 5
+export_device: cpu
+export_legacy_format: false

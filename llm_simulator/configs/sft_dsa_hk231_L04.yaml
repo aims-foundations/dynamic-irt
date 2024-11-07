@@ -1,0 +1,47 @@
+### model
+model_name_or_path: saves/L02
+shift_attn: true
+flash_attn: fa2
+use_unsloth: false
+enable_liger_kernel: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 128
+lora_alpha: 256
+lora_target: q_proj,v_proj
+deepspeed: configs/ds_z3_offload_config.json
+
+### dataset
+dataset: L04
+template: llama3
+cutoff_len: 128000
+overwrite_cache: false
+preprocessing_num_workers: 64
+
+### output
+output_dir: saves/L04
+logging_steps: 1
+save_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 1.5e-4
+num_train_epochs: 1.0
+
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+
+### eval
+# val_size: 0.0
+# eval_dataset: L04_test
+# per_device_eval_batch_size: 1
+# eval_strategy: epoch
+# eval_steps: 1000000
