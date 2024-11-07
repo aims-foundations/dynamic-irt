@@ -1,3 +1,4 @@
+import json
 import os
 import pickle
 import shutil
@@ -11,44 +12,7 @@ import requests
 import warning
 from bs4 import BeautifulSoup
 from datasets import config, load_dataset
-from huggingface_hub import HfApi
-
-
-def find_json_files(repo_id):
-    directories = []
-    base_url = f"https://huggingface.co/datasets/{repo_id}/tree/main/"
-    response = requests.get(base_url)
-
-    directory_json_files = {}
-
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, "html.parser")
-        links = soup.find_all("a", href=True)
-        for link in links:
-            href = link["href"]
-            if "/tree/main/" in href and href.count("/") == 6:
-                directory_name = href.split("/")[-1]
-                directories.append(directory_name)
-
-    for directory in directories:
-        dir_url = f"https://huggingface.co/datasets/{repo_id}/tree/main/{directory}"
-        response = requests.get(dir_url)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            links = soup.find_all("a", href=True)
-            json_files = []
-            for link in links:
-                href = link["href"]
-                if href.endswith(".json"):
-                    path = urlsplit(href).path
-                    filename = path.split("/")[-1]
-                    filename = unquote(filename)
-                    json_files.append(filename)
-
-            if json_files:
-                directory_json_files[directory] = json_files
-
-    return directory_json_files
+from huggingface_hub import HfApi, snapshot_download
 
 
 def format_dataset(repo_id, directory_json_files, threshold=0.8):
@@ -59,27 +23,25 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
 
     for directory, files in directory_json_files.items():
         for file in files:
-            data_q = load_dataset(
-                repo_id, data_files=f"{directory}/{file}", field="list_questions"
-            )
+            if file.endswith(".json"):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, "r") as json_file:
+                        data = json.load(json_file)
+                        for q in data["list_questions"]:
+                            processed_question = preprocess_question(q["question"])
+                            all_questions.append(processed_question)
 
             for q in data_q["train"]:
                 if q["name"] not in all_questions:
                     all_questions[q["name"]] = q["question"]
 
-            data_s = load_dataset(
-                repo_id, data_files=f"{directory}/{file}", field="student_answers"
-            )
-            base_name, _ = os.path.splitext(file)
+                            for response_history in answer["response_history"]:
+                                num_attempts = len(response_history["results"]) - 2
+                                question_attempts.append(num_attempts)
 
-            for answer in data_s["train"]:
-                student_id = answer["id"]
-                if student_id not in student_id_to_index:
-                    student_id_to_index[student_id] = len(student_id_to_index)
-
-                for response_history in answer["response_history"]:
-                    num_attempts = len(response_history["results"]) - 2
-                    question_attempts.append(num_attempts)
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON from file: {file_path}: {e}")
 
     student_ids = [{}] * len(student_id_to_index)
     for sid, idx in student_id_to_index.items():
@@ -96,15 +58,19 @@ def format_dataset(repo_id, directory_json_files, threshold=0.8):
     time_matrix = np.full((N, Q, T), "").tolist()
     response_matrix = np.full((N, Q, T), "").tolist()
 
-    for directory, files in directory_json_files.items():
+    for root, dirs, files in os.walk(repo_id):
         for file in files:
-            print(f"Processing {directory}/{file}")
-            data_q = load_dataset(
-                repo_id, data_files=f"{directory}/{file}", field="list_questions"
-            )
-            data_s = load_dataset(
-                repo_id, data_files=f"{directory}/{file}", field="student_answers"
-            )
+            print(f"Processing {dirs}/{file}")
+            if file.endswith(".json"):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, "r") as json_file:
+                        data = json.load(json_file)
+                        question_content_map = {
+                            f"Question {idx + 1}": (q["question"], q["max_scores"])
+                            for idx, q in enumerate(data["list_questions"])
+                            if "max_scores" in q
+                        }
 
             question_content_map = {
                 f"Question {idx + 1}": (q["name"], q["max_score"])
@@ -198,13 +164,13 @@ if __name__ == "__main__":
         "data/response_matrix.pkl",
     ]
 
-    with open("data/student_ids.pkl", "wb") as file:
+    with open("student_ids.pkl", "wb") as file:
         pickle.dump(student_ids, file)
 
-    with open("data/unique_questions.pkl", "wb") as file:
+    with open("unique_questions.pkl", "wb") as file:
         pickle.dump(unique_questions, file)
 
-    with open("data/correctness_matrix.pkl", "wb") as file:
+    with open("correctness_matrix.pkl", "wb") as file:
         pickle.dump(correctness_matrix, file)
 
     with open("data/correctness_bytc_matrix.pkl", "wb") as file:
@@ -213,7 +179,7 @@ if __name__ == "__main__":
     with open("data/time_matrix.pkl", "wb") as file:
         pickle.dump(time_matrix, file)
 
-    with open("data/response_matrix.pkl", "wb") as file:
+    with open("response_matrix.pkl", "wb") as file:
         pickle.dump(response_matrix, file)
 
     upload_files(f"stair-lab/{args.course_name}_wtc", matrices)
