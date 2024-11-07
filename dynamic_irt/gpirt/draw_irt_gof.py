@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
+from dynamic_irt.gpirt.utils import ensure_dir, set_seed
 from gpytorch.distributions import MultivariateNormal
 from gpytorch.kernels import RBFKernel, ScaleKernel
 from huggingface_hub import snapshot_download
@@ -20,7 +21,6 @@ from torch.distributions.bernoulli import Bernoulli
 from tqdm import tqdm
 from tueplots import bundles, cycler, figsizes
 from tueplots.constants.color import palettes
-from utils import ensure_dir, set_seed
 
 plt.rcParams.update(bundles.aaai2024())
 

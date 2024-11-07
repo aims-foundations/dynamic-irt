@@ -9,7 +9,7 @@ from huggingface_hub import snapshot_download
 from torchmetrics.regression import SpearmanCorrCoef
 from tqdm import tqdm
 from tueplots import bundles, constants
-from utils import ensure_dir, set_seed
+from dynamic_irt.gpirt.utils import ensure_dir, set_seed
 
 plt.rcParams.update(bundles.iclr2024())
 

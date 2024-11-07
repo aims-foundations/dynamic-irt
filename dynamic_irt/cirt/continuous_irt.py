@@ -14,7 +14,7 @@ import wandb
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
 from tueplots import bundles
-from utils import ensure_dir, set_seed
+from dynamic_irt.gpirt.utils import ensure_dir, set_seed
 
 plt.rcParams.update(bundles.aaai2024())
 

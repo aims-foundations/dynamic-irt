@@ -6,7 +6,7 @@ import pandas as pd
 import torch
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
-from utils import ensure_dir, parse_time, set_seed
+from dynamic_irt.gpirt.utils import ensure_dir, parse_time, set_seed
 
 
 if __name__ == "__main__":
