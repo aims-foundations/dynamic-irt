@@ -1,3 +1,4 @@
+.conda
 data/
 plots/
 .ipynb_checkpoints/
@@ -6,3 +7,10 @@ test.py
 wandb/
 .DS_Store
 myenv/
+results/
+llm_simulator/results/
+llm_simulator/saves/
+rssm/archived/
+rssm/eval_results/
+rssm/saves/
+results/

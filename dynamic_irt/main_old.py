@@ -13,9 +13,10 @@ import torch.optim as optim
 import wandb
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
+from tueplots import bundles
 from utils import ensure_dir, set_seed
 
-matplotlib.rcParams["text.usetex"] = True
+plt.rcParams.update(bundles.aaai2024())
 
 
 def plot_correlation(x, y, x_label, y_label, fig_title, save_file):
