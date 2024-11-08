@@ -11,10 +11,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
+from dynamic_irt.gpirt.utils import ensure_dir, set_seed
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
 from tueplots import bundles
-from dynamic_irt.gpirt.utils import ensure_dir, set_seed
 
 plt.rcParams.update(bundles.aaai2024())
 

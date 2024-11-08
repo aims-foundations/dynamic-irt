@@ -9,7 +9,7 @@ from huggingface_hub import snapshot_download
 from torchmetrics.regression import SpearmanCorrCoef
 from tqdm import tqdm
 from tueplots import bundles, constants
-from dynamic_irt.gpirt.utils import ensure_dir, set_seed
+from utils import ensure_dir, set_seed
 
 plt.rcParams.update(bundles.iclr2024())
 
@@ -80,12 +80,12 @@ if __name__ == "__main__":
     unique_time_obs = []
     aidx_obs = []  # student attempt index
     for tidx, time_ob in enumerate(time_obs):
-        unique_time_obs.append(time_ob.unique())
-        aidx_ob = torch.searchsorted(unique_time_obs[-1], time_ob)
-        aidx_ob[aidx_ob == len(unique_time_obs[-1]) - 1] = (
-            -1
-        )  # Replace the last element with -1
+        uni_time = time_ob.unique()
+        aidx_ob = torch.searchsorted(uni_time, time_ob)
+        # Replace the last element with -1
+        aidx_ob[aidx_ob == len(uni_time) - 1] = -1
         aidx_obs.append(aidx_ob)
+        unique_time_obs.append(uni_time[:-1])
 
     # Create y_train
     print("Splitting train and test data")
@@ -126,13 +126,23 @@ if __name__ == "__main__":
 
     # Pick a student
     print("Picking a student")
-    picked_sidx = args.sidx + num_train
-    student_y = y_test[args.sidx].float().cpu().numpy()
+    picked_sidx = args.sidx
+    student_x = unique_time_obs[picked_sidx][list_saidx[picked_sidx]].cpu().numpy()
+    if picked_sidx < num_train:
+        student_y = y_train[picked_sidx].float().cpu().numpy()
+    else:
+        student_y = y_test[picked_sidx - num_train].float().cpu().numpy()
+
+    # Save the student's x and y
+    with open(
+        f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_xy.pkl",
+        "wb",
+    ) as f:
+        pickle.dump((student_x, student_y), f)
 
     # Draw the student's performance
     plt.figure()
-    plt.plot(student_y)
-    # plt.xlabel("Attempt index")
+    plt.scatter(student_x, student_y)
     plt.ylabel("Correctness")
     plt.title(f"Student {picked_sidx} performance")
     plt.savefig(f"plots/student_{picked_sidx}_performance_seed{args.seed}.png", dpi=300)
@@ -142,6 +152,9 @@ if __name__ == "__main__":
     first_folder = f"results/{args.course_name}_seed{args.seed}"
     thetas = torch.load(
         os.path.join(first_folder, f"ess_thetas_by_iter_{args.iteration}.pt")
+    )
+    points = torch.load(
+        os.path.join(first_folder, f"ess_points_by_iter_{args.iteration}.pt")
     )
     time_obs = torch.load("data/time_obs.pt")
     unique_time_obs = []
@@ -156,6 +169,7 @@ if __name__ == "__main__":
 
     # student_thetas = [th[student_idxs == picked_sidx][list_saidx2idx[picked_sidx]].float().tolist() for th in thetas]
     student_thetas = [th[student_idxs == picked_sidx].float().tolist() for th in thetas]
+    student_points = [pt[100:] for pt in points]
 
     # Save thetas
     with open(
@@ -163,60 +177,57 @@ if __name__ == "__main__":
         "wb",
     ) as f:
         pickle.dump(student_thetas, f)
-    # exit(0)
-    student_thetas = np.array(student_thetas)
-    student_thetas_mean = student_thetas.mean(axis=0)
-    # student_thetas_std = student_thetas.std(axis=0)
-    # # Draw the student's theta plot
-    # plt.figure()
-    # plt.plot(unique_time_obs[picked_sidx], student_thetas_mean)
-    # plt.fill_between(
-    #     unique_time_obs[picked_sidx],
-    #     student_thetas_mean - student_thetas_std,
-    #     student_thetas_mean + student_thetas_std,
-    #     alpha=0.3,
-    # )
-    # plt.ylabel(r"$\theta$")
-    # plt.title(f"Student {picked_sidx} theta plot")
-    # plt.savefig(f"plots/student_{picked_sidx}_theta_plot_seed{args.seed}.png", dpi=300)
-    # plt.close()
+
+    # Save points
+    with open(
+        f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_points.pkl",
+        "wb",
+    ) as f:
+        pickle.dump(student_points, f)
 
     # Compute the Spearman correlation coefficient
-    print("Computing Spearman correlation coefficient")
-    spearman = SpearmanCorrCoef()
-    spearman_value = spearman(
-        torch.tensor(student_thetas_mean, device=device),
-        torch.tensor(student_y, device=device)[list_saidx2idx[picked_sidx]],
-    )
-    print(
-        f"Student {picked_sidx} Spearman correlation coefficient: {spearman_value:.2f}"
-    )
-    fig, ax = spearman.plot()
-    plt.savefig(
-        f"plots/student_{picked_sidx}_spearman_plot_seed{args.seed}.png", dpi=300
-    )
+    # print("Computing Spearman correlation coefficient")
+    # spearman = SpearmanCorrCoef()
+    # spearman_value = spearman(
+    #     torch.tensor(student_thetas_mean, device=device),
+    #     torch.tensor(student_y, device=device)[list_saidx2idx[picked_sidx]],
+    # )
+    # print(
+    #     f"Student {picked_sidx} Spearman correlation coefficient: {spearman_value:.2f}"
+    # )
+    # fig, ax = spearman.plot()
+    # plt.savefig(
+    #     f"plots/student_{picked_sidx}_spearman_plot_seed{args.seed}.png", dpi=300
+    # )
 
-    # Load zs
+    # # Load zs
     print("Loading zs")
     zs = torch.load(os.path.join(first_folder, f"ess_zs_by_iter_{args.iteration}.pt"))
 
     student_zs = [z.to(device)[list_sqidx[picked_sidx]].cpu().tolist() for z in zs]
     student_zs = np.array(student_zs)
 
-    student_zs_mean = student_zs.mean(axis=0)
-    student_zs_std = student_zs.std(axis=0)
+    # Save zs
+    with open(
+        f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_zs.pkl",
+        "wb",
+    ) as f:
+        pickle.dump(student_zs, f)
 
-    # Scatter plot of student's z with error bars
-    plt.figure()
-    plt.errorbar(
-        range(len(student_zs_mean)),
-        student_zs_mean,
-        yerr=student_zs_std,
-        fmt="o",
-        capsize=5,
-    )
-    # plt.xlabel("Testcase index")
-    plt.ylabel(r"$z$")
-    plt.title(f"Student {picked_sidx} z plot")
-    plt.savefig(f"plots/student_{picked_sidx}_z_plot_seed{args.seed}.png", dpi=300)
-    plt.close()
+    # student_zs_mean = student_zs.mean(axis=0)
+    # student_zs_std = student_zs.std(axis=0)
+
+    # # Scatter plot of student's z with error bars
+    # plt.figure()
+    # plt.errorbar(
+    #     range(len(student_zs_mean)),
+    #     student_zs_mean,
+    #     yerr=student_zs_std,
+    #     fmt="o",
+    #     capsize=5,
+    # )
+    # # plt.xlabel("Testcase index")
+    # plt.ylabel(r"$z$")
+    # plt.title(f"Student {picked_sidx} z plot")
+    # plt.savefig(f"plots/student_{picked_sidx}_z_plot_seed{args.seed}.png", dpi=300)
+    # plt.close()

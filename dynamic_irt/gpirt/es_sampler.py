@@ -27,12 +27,13 @@ class GibbsESSampler:
         list_saidx2aidx,
         unique_time_obs,
         device,
+        n_points=100,
     ):
         self.device = device
         self.theta_prior_dists = theta_prior_dists
         self.z_prior_dists = z_prior_dists
         self.n_students = len(theta_prior_dists)
-        self.n_testcases = len(z_prior_dists)
+        self.n_testcases = z_prior_dists.loc.shape[0]
         self.y_train = y_train
         self.train_test_split_idx = train_test_split_idx
         self.list_saidx = list_saidx
@@ -40,26 +41,8 @@ class GibbsESSampler:
         self.student_idxs = student_idxs
         self.list_saidx2aidx = list_saidx2aidx
         self.unique_time_obs = unique_time_obs
-        self.n_points = 100
+        self.n_points = n_points
 
-        # Compute time range for each student
-        self.time_ranges = []
-        for sidx in range(self.n_students):
-            if list_saidx[sidx] is None:
-                self.time_ranges.append(None)
-            else:
-                self.time_ranges.append(
-                    torch.concatenate([
-                        self.unique_time_obs[sidx],
-                        torch.linspace(
-                            unique_time_obs[sidx].min(),
-                            unique_time_obs[sidx].max(),
-                            self.n_points,
-                            device=device,
-                        )
-                    ])
-                )
-                
         self.student_masks = []
         for sidx in range(self.n_students):
             if list_saidx[sidx] is None:
@@ -77,9 +60,11 @@ class GibbsESSampler:
         if continue_iter == 0:
             print("Initializing thetas and zs")
             self.iter = 0
-            self.previous_thetas, self.previous_points = self.sample_theta_prior(sample_size=64)
+            self.previous_thetas, self.previous_points = self.sample_theta_prior(
+                sample_size=64
+            )
             self.previous_zs = self.sample_z_prior()
-            
+
         else:
             print("Loading thetas and zs")
             self.iter = continue_iter
@@ -136,8 +121,8 @@ class GibbsESSampler:
             if log_likelihood > ll_thres:
                 break
             else:
-                # if angle == 0:
-                #     return previous_f
+                if angle == 0:
+                    return previous_f
 
                 if angle < 0:
                     angle_min = angle
@@ -150,21 +135,13 @@ class GibbsESSampler:
 
         # Save thetas and zs
         if sampling_theta:
-            # thetas = []
-            # for sidx in range(self.n_students):
-            #     if self.student_masks[sidx] is None:
-            #         thetas.append([])
-            #         continue
-            #     thetas.append(next_f[self.student_masks[sidx]][self.list_saidx2aidx[sidx]].to(torch.bfloat16).cpu())
-            # self.list_thetas.append(thetas)
-                
             self.list_thetas.append(next_f.to(torch.bfloat16).cpu())
             self.previous_thetas = next_f
-            
-            self.previous_points = torch.cos(angle) * self.previous_points + torch.sin(angle) * nu_points
-            self.list_points.append(
-                self.previous_points.to(torch.bfloat16).cpu()
+
+            self.previous_points = (
+                torch.cos(angle) * self.previous_points + torch.sin(angle) * nu_points
             )
+            self.list_points.append(self.previous_points.to(torch.bfloat16).cpu())
             self.iter += 1
             if self.iter % 100 == 0:
                 print(f"Iteration {self.iter}\tLog likelihood: {log_likelihood}")
@@ -178,17 +155,13 @@ class GibbsESSampler:
         return log_likelihood
 
     def sample_z_prior(self):
-        return torch.stack([z.sample() for z in self.z_prior_dists])[self.all_squidx]
+        return self.z_prior_dists.sample()[self.all_squidx]
 
-    def sample_theta_prior_by_student(self, sidx, time_idxs, sample_size=1):
+    def sample_theta_prior_by_student(self, sidx, sample_size=1):
         if self.theta_prior_dists[sidx] is None:
             return []
         else:
-            return (
-                self.theta_prior_dists[sidx]
-                .posterior(time_idxs.view(-1, 1))
-                .sample(torch.Size([sample_size]))
-            ).squeeze(-1)
+            return self.theta_prior_dists[sidx].sample(torch.Size([sample_size]))
 
     def sample_theta_prior(self, sample_size=1):
         thetas = []
@@ -197,14 +170,10 @@ class GibbsESSampler:
             if self.list_saidx[sidx] is None:
                 continue
 
-            prior_samples = self.sample_theta_prior_by_student(
-                sidx, 
-                self.time_ranges[sidx], 
-                sample_size=sample_size
-            ).mean(dim=0)
+            prior_samples = self.sample_theta_prior_by_student(sidx).mean(dim=0)
 
-            thetas.append(prior_samples[:-self.n_points][self.list_saidx[sidx]])
-            points.append(prior_samples[-self.n_points:])
+            thetas.append(prior_samples[: -self.n_points][self.list_saidx[sidx]])
+            points.append(prior_samples[-self.n_points :])
 
         return torch.cat(thetas), torch.cat(points)
 
@@ -225,6 +194,6 @@ class GibbsESSampler:
         print(f"Saved thetas and zs at iteration {iteration}")
 
         # Clear thetas and zs
-        self.list_points= []
+        self.list_points = []
         self.list_thetas = []
         self.list_zs = []

@@ -1,20 +1,15 @@
 import argparse
 import pickle
 
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
-from botorch.fit import fit_gpytorch_model
-from botorch.models import SingleTaskGP
+import wandb
 
 from es_sampler import GibbsESSampler, IRTLikelihood
-from gpytorch.kernels import RBFKernel, ScaleKernel
-from gpytorch.means import ConstantMean
-from gpytorch.mlls import ExactMarginalLogLikelihood
+from gpytorch.distributions import MultivariateNormal
+from gpytorch.kernels import RBFKernel
 
 from huggingface_hub import snapshot_download
 from torch.distributions import Normal
-from torch.distributions.bernoulli import Bernoulli
 from tqdm import tqdm
 from utils import ensure_dir, set_seed
 
@@ -102,6 +97,7 @@ def load_data(data_folder, smoke_test, test_split=0.2):
         unique_time_obs.append(uni_time[:-1])
 
     # Create index vectors for students and testcases
+    list_available_sidx = []
     list_saidx = []
     list_sqidx = []
     train_test_split_idx = 0
@@ -114,6 +110,7 @@ def load_data(data_folder, smoke_test, test_split=0.2):
 
         saidx = aidx_obs[sidx][masked_idx[sidx]]  # attemp index for student
         list_saidx.append(saidx)
+        list_available_sidx.append(sidx)
 
         sqidx = qidx_obs[sidx][masked_idx[sidx]]  # global testcase index
         list_sqidx.append(sqidx)
@@ -135,6 +132,12 @@ def load_data(data_folder, smoke_test, test_split=0.2):
     # Save student saidx indexes
     with open(f"results/{args.course_name}_seed{args.seed}/list_saidx.pkl", "wb") as f:
         pickle.dump(list_saidx, f)
+
+    # Save list of available student indexes
+    with open(
+        f"results/{args.course_name}_seed{args.seed}/list_available_sidx.pkl", "wb"
+    ) as f:
+        pickle.dump(list_available_sidx, f)
 
     # Reverse the attempt indexes of students
     print("Reverse the attempt indexes of students")
@@ -173,27 +176,21 @@ def load_data(data_folder, smoke_test, test_split=0.2):
     )
 
 
-def get_theta_priors(unique_time_obs, sidx):
+def get_theta_priors(unique_time_obs, sidx, length_scale=10.0):
     time_obs_s = unique_time_obs[sidx]
-    time_obs_s = time_obs_s.reshape(-1, 1)
-    # kernel = RBFKernel(length_scale=10.0).to(device)
-    # covar = kernel(time_obs_s)
-    # return MultivariateNormal(
-    #     torch.zeros(covar.shape[0], device=device), covariance_matrix=covar
-    # )
-
-    # Create a GP model
-    gp = SingleTaskGP(
-        time_obs_s,
-        torch.zeros_like(time_obs_s),
-        covar_module=ScaleKernel(RBFKernel()),
-        mean_module=ConstantMean(),
+    points = torch.linspace(
+        unique_time_obs[sidx].min(),
+        unique_time_obs[sidx].max(),
+        100,
+        device=device,
     )
-
-    # Fit the model (even though we are not using any data, this is required to initialize the model properly)
-    mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
-    fit_gpytorch_model(mll)
-    return gp
+    time_obs_s = torch.cat([time_obs_s, points])
+    time_obs_s = time_obs_s.reshape(-1, 1)
+    kernel = RBFKernel(length_scale=length_scale).to(device)
+    covar = kernel(time_obs_s)
+    return MultivariateNormal(
+        torch.zeros(covar.shape[0], device=device), covariance_matrix=covar
+    )
 
 
 if __name__ == "__main__":
@@ -207,6 +204,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--continue_iter", help="Continue sampling", type=int, default=0
     )
+    parser.add_argument("--length_scale", help="Length scale", type=float, default=10.0)
     parser.add_argument("--smoke_test", help="Enable smoke test", action="store_true")
     args = parser.parse_args()
 
@@ -241,19 +239,17 @@ if __name__ == "__main__":
         if masked_idx[sidx].sum() == 0:
             theta_priors.append(None)
             continue
-        theta_priors.append(get_theta_priors(unique_time_obs, sidx))
+        theta_priors.append(
+            get_theta_priors(unique_time_obs, sidx, length_scale=args.length_scale)
+        )
 
     # Create normal prior distribution for z,
     # where each z_i is corresponding to a testcase in a question
     print("Creating z priors")
-    z_priors = []
-    for qidx in range(total_testcases):
-        z_priors.append(
-            Normal(
-                loc=torch.tensor(0.0, device=device),
-                scale=torch.tensor(1.0, device=device),
-            )
-        )
+    z_priors = Normal(
+        loc=torch.zeros((total_testcases,), device=device),
+        scale=torch.ones((total_testcases,), device=device),
+    )
 
     # Initialize sampler
     ges_sampler = GibbsESSampler(
@@ -281,7 +277,7 @@ if __name__ == "__main__":
         ges_sampler.sample(sampling_theta=True)
 
         # Save thetas and zs
-        if (epoch + 1) % 5000 == 0:
+        if (epoch + 1) % 1000 == 0:
             ges_sampler.save_state(result_folder, epoch + 1)
 
     # wandb.finish()

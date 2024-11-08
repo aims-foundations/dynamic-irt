@@ -10,11 +10,10 @@ from botorch.models import SingleTaskGP
 from gpytorch.kernels import RBFKernel, ScaleKernel
 from gpytorch.means import ConstantMean
 from gpytorch.mlls import ExactMarginalLogLikelihood
-from huggingface_hub import snapshot_download
-from torchmetrics.regression import SpearmanCorrCoef
+from scipy.interpolate import make_interp_spline
 from tqdm import tqdm
 from tueplots import bundles, constants
-from dynamic_irt.gpirt.utils import ensure_dir, set_seed
+from utils import ensure_dir, set_seed
 
 plt.rcParams.update(bundles.iclr2024())
 
@@ -67,12 +66,25 @@ if __name__ == "__main__":
             "rb",
         )
     )
+    student_points = pickle.load(
+        open(
+            f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_points.pkl",
+            "rb",
+        )
+    )
+    student_xs, student_ys = pickle.load(
+        open(
+            f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_xy.pkl",
+            "rb",
+        )
+    )
     # >>> n_sample x n_time
 
     student_times = torch.tensor(unique_time_obs[picked_sidx]).to(device)
     student_times = student_times[list_saidx[picked_sidx]]
     student_tidx = tidx_obs[picked_sidx][tidx_obs[picked_sidx] != -1]
     student_thetas = torch.tensor(student_thetas).to(device)
+    student_points = torch.stack(student_points).float()
     # >>> n_time
 
     sort_idx = student_tidx.argsort()
@@ -80,107 +92,70 @@ if __name__ == "__main__":
     sorted_student_thetas = [th[sort_idx] for th in student_thetas]
     student_tidx = student_tidx[sort_idx].cpu()
 
-    # for sample in sorted_student_thetas:
-    #     plt.plot(torch.arange(len(sample)),
-    #              sample.cpu().numpy())
+    min_time = student_times.min().item()
+    max_time = student_times.max().item()
+    time_range = torch.linspace(min_time, max_time, student_points.shape[-1])
+    for sample_points in student_points:
+        plt.plot(
+            time_range.cpu().numpy(),
+            sample_points.cpu().numpy(),
+            color="gray",
+            alpha=0.01,
+        )
 
-    # for tidx in student_tidx.unique():
-    #     tmask = student_tidx == tidx
-    #     st_theta = [th[tmask].tolist() for th in sorted_student_thetas]
-    #     listX = torch.arange(len(st_theta[0]))
-    #     for st in st_theta:
-    #         plt.plot(listX, st)
+    mean_points = student_points.mean(dim=0)
+    std_points = student_points.std(dim=0)
+    plt.plot(time_range.cpu().numpy(), mean_points.cpu().numpy(), color="red")
+    # plt.fill_between(
+    #     time_range.cpu().numpy(),
+    #     mean_points.cpu().numpy() - std_points.cpu().numpy(),
+    #     mean_points.cpu().numpy() + std_points.cpu().numpy(),
+    # )
 
-    # plt.xlabel("Testcase unique index")
-    # plt.ylabel(r"$\theta$")
-    # plt.title(f"Student {picked_sidx}'s $\\theta$")
-    # plt.savefig("test.png", dpi=300)
+    # Scatter student x, y
+    plt.scatter(student_xs, student_ys, color="blue")
+    uni_xs = np.unique(student_xs)
+    uni_ys = []
+    for x in uni_xs:
+        uni_ys.append(student_ys[student_xs == x].mean().item())
+    plt.plot(uni_xs, uni_ys, color="blue")
 
-    X = torch.tensor(student_times)
-    X = X[None].expand(len(student_thetas), -1).flatten()
-    # >>> n_sample x n_time
-
-    Y = torch.tensor(student_thetas).flatten()
-    # >>> n_sample x n_time
-
-    X = X[-5000:]
-    Y = Y[-5000:]
-
-    # breakpoint()
-    # Create a GP model
-    gp = SingleTaskGP(
-        X.to(device).reshape(-1, 1),
-        Y.to(device).reshape(-1, 1),
-        covar_module=ScaleKernel(RBFKernel()),
-        mean_module=ConstantMean(),
-    )
-
-    # Fit the model
-    mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
-    fit_gpytorch_model(mll)
-
-    min_time = X.min().item()
-    max_time = X.max().item()
-
-    time_range = torch.linspace(min_time, max_time, 1000).to(device)
-    # >>> n_time
-
+    # Plot week lines
     week_idx = [min(min_time + 14 * i, max_time) for i in range(7)]
-
-    with torch.no_grad():
-        gp.eval()
-        pred = gp(time_range[:, None])
-        # >>> n_time x 1
-
-    mean_pred = pred.mean.cpu().numpy()
-    std_pred = pred.stddev.cpu().numpy()
-
-    # Draw the student's theta plot
-    plt.figure()
-    plt.plot(time_range.cpu().numpy(), mean_pred)
-    plt.fill_between(
-        time_range.cpu().numpy(),
-        mean_pred - std_pred,
-        mean_pred + std_pred,
-        alpha=0.3,
-    )
-
-    # Draw horizontal lines
     for week in week_idx:
         plt.axvline(week, color="black", linestyle="--", alpha=0.5)
+
+    plt.xlabel("Days")
     plt.ylabel(r"$\theta$")
     plt.title(f"Student {picked_sidx}'s $\\theta$")
-    plt.savefig(f"plots/student_{picked_sidx}_theta_plot_seed{args.seed}.png", dpi=300)
-    plt.close()
+    plt.savefig(f"test_s{picked_sidx}_seed{args.seed}.png", dpi=300)
 
-    theta_prior = get_theta_priors(torch.tensor(student_times).reshape(-1, 1)).to(
-        device
+    # Load zs
+    print("Loading zs")
+    zs = torch.load(
+        os.path.join(
+            f"results/{args.course_name}_seed{args.seed}",
+            f"ess_zs_by_iter_{args.iteration}.pt",
+        )
     )
-    with torch.no_grad():
-        theta_prior.eval()
-        pred = theta_prior(time_range[:, None])
-        # >>> n_time x 1
 
-    mean_pred = pred.mean.cpu().numpy()
-    std_pred = pred.stddev.cpu().numpy()
+    student_zs = [z.to(device)[list_sqidx[picked_sidx]].cpu().tolist() for z in zs]
+    student_zs = np.array(student_zs)
 
-    # Draw the student's theta plot
+    student_zs_mean = student_zs.mean(axis=0)
+    student_zs_std = student_zs.std(axis=0)
+
+    # Scatter plot of student's z with error bars
     plt.figure()
-    plt.plot(time_range.cpu().numpy(), mean_pred)
-    plt.fill_between(
-        time_range.cpu().numpy(),
-        mean_pred - std_pred,
-        mean_pred + std_pred,
-        alpha=0.3,
+    plt.errorbar(
+        range(len(student_zs_mean)),
+        student_zs_mean,
+        yerr=student_zs_std,
+        fmt="o",
+        capsize=5,
     )
-
-    # Draw horizontal lines
-    for week in week_idx:
-        plt.axvline(week, color="black", linestyle="--", alpha=0.5)
-
-    plt.ylabel(r"$\theta$")
-    plt.title(f"Student {picked_sidx}'s $\\theta$ prior")
-    plt.savefig(
-        f"plots/student_{picked_sidx}_theta_prior_plot_seed{args.seed}.png", dpi=300
-    )
+    # plt.xlabel("Testcase index")
+    plt.ylabel(r"$z$")
+    plt.title(f"Student {picked_sidx} z plot")
+    plt.savefig(f"plots/student_{picked_sidx}_z_plot_seed{args.seed}.png", dpi=300)
     plt.close()
