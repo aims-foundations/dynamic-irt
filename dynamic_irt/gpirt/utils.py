@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
-import matplotlib as plt
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
@@ -25,10 +25,23 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from tueplots import bundles
 
-
 plt.rcParams.update(bundles.aaai2024())
 
 STARTING_TIME = datetime.strptime("1/9/23, 00:00:00", "%d/%m/%y, %H:%M:%S")
+
+
+def moving_average(data, window_size):
+    return np.convolve(data, np.ones(window_size) / window_size, mode="valid")
+
+
+def plot_prior_distribution(theta_priors, sidx, npoints, save_file):
+    # Plot prior distribution for theta at student 415
+    prior = theta_priors[sidx]
+    samples = prior.sample(torch.Size([20]))[:, -npoints:]
+    for sample in samples:
+        plt.plot(sample.cpu().numpy(), color="black", alpha=0.1)
+    plt.savefig(save_file, dpi=300)
+    plt.close()
 
 
 def plot_correlation(x, y, x_label, y_label, fig_title, save_file):

@@ -122,7 +122,8 @@ class GibbsESSampler:
                 break
             else:
                 if angle == 0:
-                    return previous_f
+                    next_f = previous_f
+                    break
 
                 if angle < 0:
                     angle_min = angle

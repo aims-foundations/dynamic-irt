@@ -6,12 +6,12 @@ import wandb
 
 from es_sampler import GibbsESSampler, IRTLikelihood
 from gpytorch.distributions import MultivariateNormal
-from gpytorch.kernels import RBFKernel
+from gpytorch.kernels import MaternKernel, RBFKernel
 
 from huggingface_hub import snapshot_download
 from torch.distributions import Normal
 from tqdm import tqdm
-from utils import ensure_dir, set_seed
+from utils import ensure_dir, plot_prior_distribution, set_seed
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -124,19 +124,19 @@ def load_data(data_folder, smoke_test, test_split=0.2):
     all_squidx = torch.cat(list_sqidx)
 
     # Save student indexes
-    with open(
-        f"results/{args.course_name}_seed{args.seed}/student_idxs.pkl", "wb"
-    ) as f:
+    with open(f"{result_folder}/student_idxs.pkl", "wb") as f:
         pickle.dump(student_idxs, f)
 
     # Save student saidx indexes
-    with open(f"results/{args.course_name}_seed{args.seed}/list_saidx.pkl", "wb") as f:
+    with open(f"{result_folder}/list_saidx.pkl", "wb") as f:
         pickle.dump(list_saidx, f)
 
+    # Save all squidx indexes
+    with open(f"{result_folder}/all_squidx.pkl", "wb") as f:
+        pickle.dump(all_squidx, f)
+
     # Save list of available student indexes
-    with open(
-        f"results/{args.course_name}_seed{args.seed}/list_available_sidx.pkl", "wb"
-    ) as f:
+    with open(f"{result_folder}/list_available_sidx.pkl", "wb") as f:
         pickle.dump(list_available_sidx, f)
 
     # Reverse the attempt indexes of students
@@ -154,9 +154,7 @@ def load_data(data_folder, smoke_test, test_split=0.2):
         list_saidx2aidx.append(torch.tensor(saidx2aidx))
 
     # Save attempt indexes
-    with open(
-        f"results/{args.course_name}_seed{args.seed}/list_saidx2aidx.pkl", "wb"
-    ) as f:
+    with open(f"{result_folder}/list_saidx2aidx.pkl", "wb") as f:
         pickle.dump(list_saidx2aidx, f)
 
     return (
@@ -176,17 +174,24 @@ def load_data(data_folder, smoke_test, test_split=0.2):
     )
 
 
-def get_theta_priors(unique_time_obs, sidx, length_scale=10.0):
+def get_theta_priors(unique_time_obs, sidx, npoints, kernel, length_scale):
     time_obs_s = unique_time_obs[sidx]
     points = torch.linspace(
         unique_time_obs[sidx].min(),
         unique_time_obs[sidx].max(),
-        100,
+        npoints,
         device=device,
     )
     time_obs_s = torch.cat([time_obs_s, points])
     time_obs_s = time_obs_s.reshape(-1, 1)
-    kernel = RBFKernel(length_scale=length_scale).to(device)
+    if kernel == "Matern":
+        kernel = MaternKernel(nu=2.5).to(device)
+    elif kernel == "RBF":
+        kernel = RBFKernel().to(device)
+        kernel._set_lengthscale(length_scale)
+    else:
+        raise ValueError("Invalid kernel type")
+
     covar = kernel(time_obs_s)
     return MultivariateNormal(
         torch.zeros(covar.shape[0], device=device), covariance_matrix=covar
@@ -204,12 +209,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--continue_iter", help="Continue sampling", type=int, default=0
     )
-    parser.add_argument("--length_scale", help="Length scale", type=float, default=10.0)
+    parser.add_argument(
+        "--kernel",
+        help="Prior Kernel",
+        type=str,
+        default="RBF",
+        choices=["RBF", "Matern"],
+    )
+    parser.add_argument("--npoints", type=int, default=500)
+    parser.add_argument("--length_scale", help="Length scale", type=float, default=50.0)
     parser.add_argument("--smoke_test", help="Enable smoke test", action="store_true")
     args = parser.parse_args()
 
     set_seed(args.seed)
-    ensure_dir(f"results/{args.course_name}_seed{args.seed}")
+    result_folder = f"results/{args.course_name}_seed{args.seed}_npoints{args.npoints}_kernel{args.kernel}_lengthscale{args.length_scale}"
+
+    ensure_dir(result_folder)
     data_folder = snapshot_download(
         repo_id=f"stair-lab/{args.course_name}_wtc", repo_type="dataset"
     )
@@ -240,7 +255,13 @@ if __name__ == "__main__":
             theta_priors.append(None)
             continue
         theta_priors.append(
-            get_theta_priors(unique_time_obs, sidx, length_scale=args.length_scale)
+            get_theta_priors(
+                unique_time_obs,
+                sidx,
+                npoints=args.npoints,
+                kernel=args.kernel,
+                length_scale=args.length_scale,
+            )
         )
 
     # Create normal prior distribution for z,
@@ -264,9 +285,9 @@ if __name__ == "__main__":
         student_idxs=student_idxs,
         list_saidx2aidx=list_saidx2aidx,
         device=device,
+        n_points=args.npoints,
     )
 
-    result_folder = f"results/{args.course_name}_seed{args.seed}"
     ges_sampler.load_state(result_folder, continue_iter=args.continue_iter)
 
     for epoch in tqdm(range(args.continue_iter, args.epochs), desc="Sampling"):
