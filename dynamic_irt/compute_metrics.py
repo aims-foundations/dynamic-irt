@@ -6,6 +6,7 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from dynamic_irt.gpirt.utils import ensure_dir, set_seed
 from huggingface_hub import snapshot_download
 from sklearn.metrics import (
     accuracy_score,
@@ -15,7 +16,6 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from tqdm import tqdm
-from utils import ensure_dir, set_seed
 
 
 def item_response_fn_1PL(theta, z):

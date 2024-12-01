@@ -1,10 +1,14 @@
 import json
 import os
+import random
 import re
 import time
-from urllib.parse import parse_qs, unquote, urlparse, urlsplit
-import random
 from datetime import datetime
+from urllib.parse import parse_qs, unquote, urlparse, urlsplit
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 
 from Levenshtein import distance
 
@@ -19,11 +23,43 @@ from selenium.common.exceptions import (
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from tueplots import bundles
+
+plt.rcParams.update(bundles.aaai2024())
 
 STARTING_TIME = datetime.strptime("1/9/23, 00:00:00", "%d/%m/%y, %H:%M:%S")
 
+
+def moving_average(data, window_size):
+    return np.convolve(data, np.ones(window_size) / window_size, mode="valid")
+
+
+def plot_prior_distribution(theta_priors, sidx, npoints, save_file):
+    # Plot prior distribution for theta at student 415
+    prior = theta_priors[sidx]
+    samples = prior.sample(torch.Size([20]))[:, -npoints:]
+    for sample in samples:
+        plt.plot(sample.cpu().numpy(), color="black", alpha=0.1)
+    plt.savefig(save_file, dpi=300)
+    plt.close()
+
+
+def plot_correlation(x, y, x_label, y_label, fig_title, save_file):
+    plt.figure(figsize=(5, 5))
+    axis_max = max(x.max(), y.max())
+    axis_min = min(x.min(), y.min())
+    plt.scatter(x, y)
+    plt.xlim(axis_min, axis_max)
+    plt.ylim(axis_min, axis_max)
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(fig_title)
+    plt.savefig(f"plots/{save_file}", dpi=300)
+
+
 def compute_ed(original, list_str):
     return [distance(original, x) for x in list_str]
+
 
 def parse_time(time_str):
     # Parsing the string into a datetime object
@@ -34,6 +70,16 @@ def parse_time(time_str):
 
 def ensure_dir(dir_path):
     os.makedirs(dir_path, exist_ok=True)
+
+
+def set_seed(seed):
+    random.seed(seed)
+    # torch.backends.cudnn.deterministic=True
+    # torch.backends.cudnn.benchmark = False
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def run_crawler(crawler, url):
