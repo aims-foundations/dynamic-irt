@@ -1,6 +1,7 @@
 import argparse
 import os
 import pickle
+import random
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,12 +23,23 @@ if __name__ == "__main__":
         "--course_name", help="Course Name", type=str, default="dsa_hk231"
     )
     parser.add_argument("--seed", help="Random seed", type=int, default=42)
-    parser.add_argument("--iteration", help="# Iteration", type=int, default=100000)
+    parser.add_argument("--npoints", type=int, default=500)
+    parser.add_argument(
+        "--kernel",
+        help="Prior Kernel",
+        type=str,
+        default="RBF",
+        choices=["RBF", "Matern"],
+    )
+    parser.add_argument("--length_scale", help="Length scale", type=float, default=10.0)
+    parser.add_argument("--start_iter", type=int, default=2000)
+    parser.add_argument("--end_iter", type=int, default=10000)
+    parser.add_argument("--step", type=int, default=1000)
     parser.add_argument("--sidx", help="Student index", type=int, default=0)
     args = parser.parse_args()
 
     set_seed(args.seed)
-    ensure_dir(f"results/{args.course_name}_seed{args.seed}")
+    result_folder = f"results/{args.course_name}_seed{args.seed}_npoints{args.npoints}_kernel{args.kernel}_lengthscale{args.length_scale}"
     data_folder = snapshot_download(
         repo_id=f"stair-lab/{args.course_name}_wtc", repo_type="dataset"
     )
@@ -135,7 +147,7 @@ if __name__ == "__main__":
 
     # Save the student's x and y
     with open(
-        f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_xy.pkl",
+        f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_xy.pkl",
         "wb",
     ) as f:
         pickle.dump((student_x, student_y), f)
@@ -146,73 +158,101 @@ if __name__ == "__main__":
     plt.ylabel("Correctness")
     plt.title(f"Student {picked_sidx} performance")
     plt.savefig(f"plots/student_{picked_sidx}_performance_seed{args.seed}.png", dpi=300)
+    plt.close()
 
     # Load thetas
     print("Loading thetas")
-    first_folder = f"results/{args.course_name}_seed{args.seed}"
-    thetas = torch.load(
-        os.path.join(first_folder, f"ess_thetas_by_iter_{args.iteration}.pt")
-    )
-    points = torch.load(
-        os.path.join(first_folder, f"ess_points_by_iter_{args.iteration}.pt")
-    )
+    thetas = []
+    points = []
+
+    for iter in tqdm(range(args.start_iter, args.end_iter + 1, args.step)):
+        thetas.extend(
+            torch.load(os.path.join(result_folder, f"ess_thetas_by_iter_{iter}.pt"))
+        )
+        points.extend(
+            torch.load(os.path.join(result_folder, f"ess_points_by_iter_{iter}.pt"))
+        )
+
     time_obs = torch.load("data/time_obs.pt")
     unique_time_obs = []
     for tidx, time_ob in enumerate(time_obs):
         unique_time_obs.append(time_ob.unique()[:-1].cpu().numpy())
     student_idxs = pickle.load(
-        open(os.path.join(first_folder, "student_idxs.pkl"), "rb")
+        open(os.path.join(result_folder, "student_idxs.pkl"), "rb")
     )
     list_saidx2idx = pickle.load(
-        open(os.path.join(first_folder, "list_saidx2aidx.pkl"), "rb")
+        open(os.path.join(result_folder, "list_saidx2aidx.pkl"), "rb")
+    )
+    list_available_sidx = pickle.load(
+        open(os.path.join(result_folder, "list_available_sidx.pkl"), "rb")
     )
 
-    # student_thetas = [th[student_idxs == picked_sidx][list_saidx2idx[picked_sidx]].float().tolist() for th in thetas]
     student_thetas = [th[student_idxs == picked_sidx].float().tolist() for th in thetas]
-    student_points = [pt[100:] for pt in points]
+    student_available_idx = list_available_sidx.index(picked_sidx)
+    student_points = [
+        pt[100 * student_available_idx : 100 * (student_available_idx + 1)]
+        for pt in points
+    ]
 
     # Save thetas
     with open(
-        f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_thetas.pkl",
+        f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_thetas.pkl",
         "wb",
     ) as f:
         pickle.dump(student_thetas, f)
 
     # Save points
     with open(
-        f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_points.pkl",
+        f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_points.pkl",
         "wb",
     ) as f:
         pickle.dump(student_points, f)
 
     # Compute the Spearman correlation coefficient
-    # print("Computing Spearman correlation coefficient")
-    # spearman = SpearmanCorrCoef()
-    # spearman_value = spearman(
-    #     torch.tensor(student_thetas_mean, device=device),
-    #     torch.tensor(student_y, device=device)[list_saidx2idx[picked_sidx]],
-    # )
-    # print(
-    #     f"Student {picked_sidx} Spearman correlation coefficient: {spearman_value:.2f}"
-    # )
-    # fig, ax = spearman.plot()
-    # plt.savefig(
-    #     f"plots/student_{picked_sidx}_spearman_plot_seed{args.seed}.png", dpi=300
-    # )
+    print("Computing Spearman correlation coefficient")
+    spearman = SpearmanCorrCoef()
+    list_spearman = []
+    for sampled_thetas in tqdm(
+        random.choices(student_thetas, k=1000), desc="Computing SCC"
+    ):
+        list_spearman.append(
+            spearman(
+                torch.tensor(sampled_thetas, device=device)[
+                    list_saidx2idx[picked_sidx]
+                ],
+                torch.tensor(student_y, device=device)[list_saidx2idx[picked_sidx]],
+            )
+            .cpu()
+            .item()
+        )
+
+    # Plot the Spearman correlation coefficient histogram
+    plt.figure()
+    plt.hist(list_spearman, bins=20)
+
+    # Draw mean axvline
+    plt.axvline(np.mean(list_spearman), color="red", linestyle="dashed")
+    plt.xlabel("Spearman correlation coefficient")
+    plt.ylabel("Frequency")
+    plt.title(f"Student {picked_sidx} SCC")
+    plt.savefig(
+        f"plots/student_{picked_sidx}_spearman_hist_seed{args.seed}_npoints{args.npoints}_kernel{args.kernel}_lengthscale{args.length_scale}.png",
+        dpi=300,
+    )
 
     # # Load zs
-    print("Loading zs")
-    zs = torch.load(os.path.join(first_folder, f"ess_zs_by_iter_{args.iteration}.pt"))
+    # print("Loading zs")
+    # zs = torch.load(os.path.join(first_folder, f"ess_zs_by_iter_{args.iteration}.pt"))
 
-    student_zs = [z.to(device)[list_sqidx[picked_sidx]].cpu().tolist() for z in zs]
-    student_zs = np.array(student_zs)
+    # student_zs = [z.to(device)[list_sqidx[picked_sidx]].cpu().tolist() for z in zs]
+    # student_zs = np.array(student_zs)
 
-    # Save zs
-    with open(
-        f"results/{args.course_name}_seed{args.seed}/student_{picked_sidx}_zs.pkl",
-        "wb",
-    ) as f:
-        pickle.dump(student_zs, f)
+    # # Save zs
+    # with open(
+    #     f"{result_folder}/student_{picked_sidx}_zs.pkl",
+    #     "wb",
+    # ) as f:
+    #     pickle.dump(student_zs, f)
 
     # student_zs_mean = student_zs.mean(axis=0)
     # student_zs_std = student_zs.std(axis=0)
