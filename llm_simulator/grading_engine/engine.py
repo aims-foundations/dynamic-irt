@@ -1,20 +1,30 @@
 import os
 import shutil
-import subprocess
 import tempfile
-from concurrent.futures import ProcessPoolExecutor
 
 from .utils import parallel_compile, parallel_run_executables
 
 
 class CPPEvaluator:
     def __init__(self, template, testcases, max_workers=8):
+        """Initializes the CPPEvaluator class.
+
+        Args:
+            template (str): The template code with placeholders for the student's answer and test cases.
+            testcases (Dict[str]): A list of test cases, each containing the input, output, and optional std_in.
+            max_workers (int, optional): The maximum number of workers to use for parallel processing. Defaults to 8.
+        """
         self.template = template
         self.testcases = testcases
         self.max_workers = max_workers
         self.formatted_testcases, self.std_inputs = self.format_testcases()
 
     def format_testcases(self):
+        """Formats the test cases into the required format for the grading engine.
+
+        Returns:
+            Tuple[List[Dict[str]], List[str]]: A tuple containing the formatted test cases and standard inputs.
+        """
         formatted_testcases = []
         std_inputs = []
         for testcase in self.testcases:
@@ -32,6 +42,14 @@ class CPPEvaluator:
         return formatted_testcases, std_inputs
 
     def generate_code(self, student_answer):
+        """Generates the C++ code with the student's answer and test cases.
+
+        Args:
+            student_answer (str): The student's answer to be inserted into the template.
+
+        Returns:
+            List[str]: A list of C++ code snippets with the student's answer and test cases inserted.
+        """
         # Insert the student's answer and test cases into the template
         code = self.template.replace("{{ STUDENT_ANSWER }}", student_answer)
 
@@ -48,6 +66,14 @@ class CPPEvaluator:
         return list_codes
 
     def write_and_compile_code(self, codes):
+        """Writes and compiles the C++ code.
+
+        Args:
+            codes (List[str]): A list of C++ code snippets.
+
+        Returns:
+            Tuple[List[str], str]: A tuple containing the list of executable paths and the temporary directory.
+        """
         # Write the C++ code to a temporary file
         temp_dir = tempfile.mkdtemp()
         for i, code in enumerate(codes):
@@ -61,6 +87,14 @@ class CPPEvaluator:
         return executables, temp_dir
 
     def evaluate(self, student_answer):
+        """Evaluates the student's answer using the test cases.
+
+        Args:
+            student_answer (str): The student's answer to be evaluated.
+
+        Returns:
+            Dict[str, Union[float, List[int]]]: A dictionary containing the score and test case results.
+        """
         # Generate the C++ code with the student's answer
         codes = self.generate_code(student_answer)
 
