@@ -1,22 +1,20 @@
 import json
 import os
+import io
 import pickle
-import shutil
 from argparse import ArgumentParser
-from urllib.parse import unquote, urlsplit
 
-import Levenshtein
 import numpy as np
-import pandas as pd
-import requests
-from datasets import config, load_dataset
+import torch
+from tqdm import tqdm
+from datasets import load_dataset
 from huggingface_hub import HfApi, snapshot_download
+from utils import parse_time
 
 
 def format_dataset(repo_id, directory_json_files):
     question_attempts = []
     student_id_to_index = {}
-    correctness = []
     all_questions = {}
 
     for directory, files in directory_json_files.items():
@@ -167,6 +165,86 @@ def upload_files(repo_id, file_paths):
         except Exception as e:
             print(f"Failed to upload {file_name}: {str(e)}")
 
+def convert_to_tc_matrix(y_obs, time_matrix, device):
+    # Number of questions
+    n_question = len(y_obs[0])
+
+    # Compute maximum number of testcases for each question
+    list_max_testcases = {}
+    for qidx in range(n_question):
+        list_max_testcases[qidx] = 0
+        for student in y_obs:
+            list_n_testcases = []
+            for x in student[qidx]:
+                if not isinstance(x, int):
+                    list_n_testcases.append(len(x))
+                else:
+                    list_n_testcases.append(0)
+            list_max_testcases[qidx] = max(
+                list_max_testcases[qidx], max(list_n_testcases)
+            )
+
+    # Flatten the testcases into questions
+    # The new shape of y_obs is n_student x (n_question*n_testcase) x n_attempt
+    y_tc_obs = []
+    time_tc_obs = []
+    qidx_tc_obs = []
+    tidx_tc_obs = []
+    for sidx, student in enumerate(tqdm(y_obs, desc="Preprocessing")):
+        student_tc = []
+        student_time = []
+        student_qidx = []
+        student_tidx = []
+        global_tidx = 0
+        for qidx in range(n_question):
+            for tidx in range(list_max_testcases[qidx]):
+                student_tc.append([])
+                student_time.append([])
+                student_qidx.append([])
+                student_tidx.append([])
+
+                for aidx, attempt in enumerate(student[qidx]):
+
+                    if attempt == -1:
+                        student_tc[-1].append(-1)
+                        student_time[-1].append(parse_time("01/01/30, 00:00:00"))
+                        student_qidx[-1].append(-1)
+                        student_tidx[-1].append(-1)
+                    else:
+                        if len(attempt) == 0:
+                            student_tc[-1].append(-1)
+                            student_time[-1].append(parse_time("01/01/30, 00:00:00"))
+                            student_qidx[-1].append(-1)
+                            student_tidx[-1].append(-1)
+                        elif (
+                            tidx < len(attempt) and time_matrix[sidx][qidx][aidx] != ""
+                        ):
+                            student_tc[-1].append(attempt[tidx])
+                            student_time[-1].append(
+                                parse_time(time_matrix[sidx][qidx][aidx])
+                            )
+                            student_qidx[-1].append(qidx)
+                            student_tidx[-1].append(global_tidx)
+                        else:
+                            student_tc[-1].append(-1)
+                            student_time[-1].append(parse_time("01/01/30, 00:00:00"))
+                            student_qidx[-1].append(-1)
+                            student_tidx[-1].append(-1)
+                            # raise ValueError("Testcase index out of bound")
+
+                global_tidx += 1
+
+        y_tc_obs.append(student_tc)
+        time_tc_obs.append(student_time)
+        qidx_tc_obs.append(student_qidx)
+        tidx_tc_obs.append(student_tidx)
+
+    y_obs = torch.tensor(y_tc_obs, device=device)
+    qidx_obs = torch.tensor(qidx_tc_obs, device=device)
+    time_obs = torch.tensor(time_tc_obs, device=device)
+    tidx_obs = torch.tensor(tidx_tc_obs, device=device)
+
+    return y_obs, qidx_obs, time_obs, tidx_obs
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -174,6 +252,7 @@ if __name__ == "__main__":
         "--course_name", help="Class Name", type=str, default="dsa_hk231"
     )
     args = parser.parse_args()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Download and load data
     data_folder = snapshot_download(
@@ -195,36 +274,83 @@ if __name__ == "__main__":
         time_matrix,
         response_matrix,
     ) = format_dataset(data_folder, directory_json_files)
-
-    matrices = [
-        "data/student_ids.pkl",
-        "data/unique_questions.pkl",
-        "data/question_name2idx.pkl",
-        "data/correctness_matrix.pkl",
-        "data/correctness_bytc_matrix.pkl",
-        "data/time_matrix.pkl",
-        "data/response_matrix.pkl",
-    ]
-
-    with open("data/student_ids.pkl", "wb") as file:
-        pickle.dump(student_ids, file)
-
-    with open("data/unique_questions.pkl", "wb") as file:
-        pickle.dump(unique_questions, file)
-
-    with open("data/question_name2idx.pkl", "wb") as file:
-        pickle.dump(question_name2idx, file)
-
-    with open("data/correctness_matrix.pkl", "wb") as file:
-        pickle.dump(correctness_matrix, file)
-
-    with open("data/correctness_bytc_matrix.pkl", "wb") as file:
-        pickle.dump(correctness_bytc_matrix, file)
-
-    with open("data/time_matrix.pkl", "wb") as file:
-        pickle.dump(time_matrix, file)
-
-    with open("data/response_matrix.pkl", "wb") as file:
-        pickle.dump(response_matrix, file)
-
-    upload_files(f"stair-lab/{args.course_name}_wtc", matrices)
+    
+    
+    y_obs, qidx_obs, time_obs, tidx_obs = convert_to_tc_matrix(
+        correctness_bytc_matrix, time_matrix, device
+    )
+    
+    upload_api = HfApi()
+    
+    student_ids_file = io.BytesIO()
+    pickle.dump(student_ids, student_ids_file)
+    upload_api.upload_file(
+        repo_id=f"stair-lab/code_insights_matrices",
+        repo_type="dataset",
+        path_in_repo=f"{args.course_name}/student_ids.pkl",
+        path_or_fileobj=student_ids_file,
+    )
+    
+    unique_questions_file = io.BytesIO()
+    pickle.dump(unique_questions, unique_questions_file)
+    upload_api.upload_file(
+        repo_id=f"stair-lab/code_insights_matrices",
+        repo_type="dataset",
+        path_in_repo=f"{args.course_name}/unique_questions.pkl",
+        path_or_fileobj=unique_questions_file,
+    )
+    
+    question_name2idx_file = io.BytesIO()
+    pickle.dump(question_name2idx, question_name2idx_file)
+    upload_api.upload_file(
+        repo_id=f"stair-lab/code_insights_matrices",
+        repo_type="dataset",
+        path_in_repo=f"{args.course_name}/question_name2idx.pkl",
+        path_or_fileobj=question_name2idx_file,
+    )
+    
+    response_matrix_file = io.BytesIO()
+    pickle.dump(response_matrix, response_matrix_file)
+    upload_api.upload_file(
+        repo_id=f"stair-lab/code_insights_matrices",
+        repo_type="dataset",
+        path_in_repo=f"{args.course_name}/response_matrix.pkl",
+        path_or_fileobj=response_matrix_file,
+    )
+    
+    
+    correctness_matrix_file = io.BytesIO()
+    torch.save(y_obs, correctness_matrix_file)
+    upload_api.upload_file(
+        repo_id=f"stair-lab/code_insights_matrices",
+        repo_type="dataset",
+        path_in_repo=f"{args.course_name}/correctness_matrix.pt",
+        path_or_fileobj=correctness_matrix_file,
+    )
+    
+    time_obs_file = io.BytesIO()
+    torch.save(time_obs, time_obs_file)
+    upload_api.upload_file(
+        repo_id=f"stair-lab/code_insights_matrices",
+        repo_type="dataset",
+        path_in_repo=f"{args.course_name}/time_matrix.pt",
+        path_or_fileobj=time_obs_file,
+    )
+    
+    qidx_obs_file = io.BytesIO()
+    torch.save(qidx_obs, qidx_obs_file)
+    upload_api.upload_file(
+        repo_id=f"stair-lab/code_insights_matrices",
+        repo_type="dataset",
+        path_in_repo=f"{args.course_name}/question_idx_matrix.pt",
+        path_or_fileobj=qidx_obs_file
+    )
+    
+    tidx_obs_file = io.BytesIO()
+    torch.save(tidx_obs, tidx_obs_file)
+    upload_api.upload_file(
+        repo_id=f"stair-lab/code_insights_matrices",
+        repo_type="dataset",
+        path_in_repo=f"{args.course_name}/testcase_idx_matrix.pt",
+        path_or_fileobj=tidx_obs_file,
+    )
