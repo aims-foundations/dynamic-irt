@@ -226,6 +226,25 @@ def format_chat_template(tokenizer, exams, exercises, style="trl"):
 
     return prompts
 
+def split_ds_lf(ds, test_size=0.2):
+    new_student_idxs = []
+    for idx, hist in enumerate(ds["history"]):
+        if len(hist) == 0:
+            new_student_idxs.append(idx)
+
+    total_students = len(new_student_idxs)
+    start_test_idx = new_student_idxs[int(total_students * (1-test_size))]
+    new_ds = ds.select(list(range(0, start_test_idx)))
+    new_ds_test = ds.select(list(range(start_test_idx, len(ds))))
+
+    data_dict = DatasetDict({
+        "train": new_ds,
+        "test": new_ds_test,
+    })
+    return data_dict
+
+def split_ds_normal(ds, test_size=0.2):
+    return ds.train_test_split(test_size=test_size)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -630,23 +649,31 @@ if __name__ == "__main__":
 
         if args.style == "easycontext":
             cls_ds = Dataset.from_dict({"input_ids": list_prompts})
+            cls_ds = split_ds_normal(cls_ds)
         elif args.style == "trl":
             cls_ds = Dataset.from_dict({"text": list_prompts})
+            cls_ds = split_ds_normal(cls_ds)
         elif args.style == "lf":
-            df = pd.DataFrame(list_prompts)
-            cls_ds = Dataset.from_pandas(df)
+            cls_ds = Dataset.from_dict(list_prompts)
+            cls_ds = split_ds_lf(cls_ds)
         final_ds[cls] = cls_ds
 
     # Create final dataset and push to hf hub
-    all_ds = concatenate_datasets(list(final_ds.values()))
-    final_ds["all_cls"] = all_ds
-    final_ds = DatasetDict(final_ds)
+    all_ds_train = concatenate_datasets([ds["train"] for ds in final_ds.values()])
+    all_ds_test = concatenate_datasets([ds["test"] for ds in final_ds.values()])
+    final_ds["all_cls"] = DatasetDict(
+        {
+            "train": all_ds_train,
+            "test": all_ds_test,
+        }
+    )
 
     if args.style == "lf":
-        repo_name = f"stair-lab/{args.course_name}_wtc_per_student_sft_lf"
+        repo_name = f"stair-lab/{args.course_name}_sft"
     elif args.style == "trl":
-        repo_name = f"stair-lab/{args.course_name}_wtc_per_student_sft"
+        repo_name = f"stair-lab/{args.course_name}_sft_trl"
     elif args.style == "easycontext":
-        repo_name = f"stair-lab/{args.course_name}_wtc_per_student_sft_tokenized"
+        repo_name = f"stair-lab/{args.course_name}_sft_easycontext"
 
-    final_ds.push_to_hub(repo_name)
+    for cls, ds in final_ds.items():
+        ds.push_to_hub(repo_name, config_name=cls)
