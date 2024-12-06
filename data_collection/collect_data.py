@@ -17,7 +17,6 @@ from configs import (
     LOGIN_PASSWD,
     LOGIN_USER,
 )
-from Levenshtein import distance
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.chrome.options import Options
@@ -27,16 +26,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from tqdm import tqdm
-from utils import (
-    compute_ed,
-    filter_class_group,
-    get_test_cases,
-    parse_score,
-    run_crawler,
-    safe_find_element,
-    safe_navigate,
-)
-from webdriver_manager.chrome import ChromeDriverManager
+from utils import compute_ed, filter_class_group, run_crawler, safe_find_element
 
 
 class CrawlData:
@@ -61,7 +51,7 @@ class CrawlData:
     def initialize_driver(self, reinitializing=False):
         if reinitializing:
             try:
-                driver.quit()
+                self.driver.quit()
             except Exception as e:
                 print("No session to quit:", str(e))
         chrome_options = Options()
@@ -397,14 +387,15 @@ def parallel_get_student_answer(
 
 
 if __name__ == "__main__":
-    # wandb.init(project="student-score-crawler")
+    wandb.init(project="student-score-crawler")
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--course_name", help="Class Name", type=str, default="DSA-HK231"
+        "--course_name", help="Course Name", type=str, default="dsa_hk231"
     )
     parser.add_argument("--class_name", help="Class Name", type=str, default="CC01")
     parser.add_argument("--timeout", help="Timeout for waiting", type=int, default=60)
+    # parser.add_argument("--max_workers", help="Max Workers", type=int, default=4)
     args = parser.parse_args()
 
     course_name = args.course_name
@@ -431,9 +422,7 @@ if __name__ == "__main__":
     course_id = query_params.get("id", [None])[0]
     assert course_id is not None, "No course id found!"
 
-    student_list_url = (
-        f"https://{domain}/user/index.php?page=0&perpage=200&contextid=0&id={course_id}"
-    )
+    student_list_url = f"https://{domain}/user/index.php?page=0&perpage=1650&contextid=0&id={course_id}"
     success = run_crawler(crawler, student_list_url)
     assert success, "Failed to get student list!"
     print("Access success!")
@@ -457,19 +446,40 @@ if __name__ == "__main__":
     ]
 
     # Create data folder
-    os.makedirs(f"data/{course_name}/{class_name}", exist_ok=True)
+    os.makedirs(f"../data/{course_name}/{class_name}", exist_ok=True)
 
     all_data = []
-    for quiz_link in tqdm(QUIZZES_RESULT_LINKS[22:], desc="Crawling"):
+    for quiz_link in tqdm(QUIZZES_RESULT_LINKS, desc="Crawling"):
         print("Running: ", quiz_link)
         success = run_crawler(crawler, quiz_link)
         if not success:
             print("Failed to get", quiz_link)
             continue
 
+        try:
+            # Set max number of students to 1650
+            print("Setting max number of students")
+            num_max_student = crawler.driver.find_element(By.ID, "id_pagesize")
+            n_max_student = num_max_student.get_attribute("value")
+            if n_max_student != "1650":
+                for _ in range(10):
+                    num_max_student.send_keys(Keys.BACKSPACE)
+                num_max_student.send_keys("1650")
+                num_max_student.send_keys(Keys.RETURN)
+                WebDriverWait(crawler.driver, args.timeout).until(
+                    EC.presence_of_all_elements_located(
+                        (By.CSS_SELECTOR, "table#attempts tbody tr")
+                    )
+                )
+            else:
+                print("Max number of students is already set to 1650")
+        except:
+            print("Failed to set max number of students")
+            continue
+
         first_part = crawler.driver.title.split(":")[0]
         filename = re.sub(f"[{string.punctuation}]", "_", first_part)
-        if os.path.exists(f"data/{course_name}/{class_name}/{filename}.json"):
+        if os.path.exists(f"../data/{course_name}/{class_name}/{filename}.json"):
             print("Skipping: ", quiz_link)
             continue
 
@@ -546,7 +556,7 @@ if __name__ == "__main__":
         if isinstance(topic_data["list_questions"][0], list):
             question_randomized = True
 
-        # with ThreadPoolExecutor(max_workers=4) as executor:
+        # with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
         #     futures = [
         #         executor.submit(
         #             parallel_get_student_answer,
@@ -575,7 +585,7 @@ if __name__ == "__main__":
 
         # Save data
         with open(
-            f"data/{course_name}/{class_name}/{filename}.json", "w", encoding="utf-8"
+            f"../data/{course_name}/{class_name}/{filename}.json", "w", encoding="utf-8"
         ) as json_file:
             json.dump(topic_data, json_file)
 
@@ -583,7 +593,7 @@ if __name__ == "__main__":
         "total_quiz_links": len(QUIZZES_RESULT_LINKS),
         "total_students": sum(len(data["student_answers"]) for data in all_data),
     }
-    # wandb.log(metrics)
+    wandb.log(metrics)
 
     crawler.driver.quit()
-    # wandb.finish()
+    wandb.finish()

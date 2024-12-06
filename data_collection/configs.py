@@ -5,7 +5,7 @@ chromedriver_path = "/afs/cs.stanford.edu/u/nqduc/chromedriver-linux64/chromedri
 chrome_binary_path = "/afs/cs.stanford.edu/u/nqduc/chrome-linux64/chrome"
 
 DATA_LINKS = {
-    "DSA-HK231": {
+    "dsa_hk231": {
         "L01": "https://e-learning.hcmut.edu.vn/course/view.php?id=109032",
         "L02": "https://e-learning.hcmut.edu.vn/course/view.php?id=112561",
         "L03": "https://e-learning.hcmut.edu.vn/course/view.php?id=111383",
@@ -33,7 +33,7 @@ DATA_LINKS = {
         "CN02": "https://e-learning.hcmut.edu.vn/course/view.php?id=109195",
         "DT01": "https://e-learning.hcmut.edu.vn/course/view.php?id=108885",
     },
-    "DSA-HK221": {
+    "dsa_hk221": {
         "L01": "https://e-learning.hcmut.edu.vn/course/view.php?id=72806",
         "L02": "https://e-learning.hcmut.edu.vn/course/view.php?id=72802",
         "L03": "https://e-learning.hcmut.edu.vn/course/view.php?id=72804",
@@ -48,12 +48,11 @@ DATA_LINKS = {
         "CC04": "https://e-learning.hcmut.edu.vn/course/view.php?id=67401",
         "CC05": "https://e-learning.hcmut.edu.vn/course/view.php?id=67400",
         "CN02": "https://e-learning.hcmut.edu.vn/course/view.php?id=75670",
-        "ALL": "https://e-learning.hcmut.edu.vn/course/view.php?id=74329",
     },
-    "PF-HK232": {
+    "pf_hk232": {
         "ALL": "https://lms.hcmut.edu.vn/course/view.php?id=31275",
     },
-    "PF-HK222": {
+    "pf_hk222": {
         "ALL": "https://e-learning.hcmut.edu.vn/course/view.php?id=94316",
     },
 }
