@@ -43,7 +43,7 @@ def process_one_student(student_answer):
 
             if run_test:
                 answer = preprocess_answer(attempt["action"])
-                evaluator = list_evaluators[wi][topic_file][qidx]
+                evaluator = list_evaluators[topic_file][qidx]
                 if sub_qidx is not None:
                     evaluator = evaluator[sub_qidx]
 
@@ -79,7 +79,6 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--course_name", type=str, default="dsa_hk231")
     parser.add_argument("--class_name", type=str, default="CC01")
-    parser.add_argument("--start_week", type=int, default=1)
     parser.add_argument("--max_workers", type=int, default=16)
     parser.add_argument("--save_dir", type=str, default="../data")
     args = parser.parse_args()
@@ -91,92 +90,80 @@ if __name__ == "__main__":
     list_files = [x for x in list_files if x.endswith("json")]
     list_files = sorted(list_files)
 
-    # Check if list file has type WEEK_FILES[args.course_name][0] or WEEK_FILES[args.course_name][1]
-    if list_files[0] in WEEK_FILES[course_name][1][0]:
-        weeks = WEEK_FILES[course_name][1]
-    else:
-        weeks = WEEK_FILES[course_name][0]
-
-    # Do the same for exam
-    weeks.append(WEEK_FILES[course_name]["exam"])
-
     # Loop on all weeks to create set of CPPEvaluator
     # One CPPEvaluator corresponds to one question in one week
     list_evaluators = []
 
     # >>> weeks x questions
     list_res = []
+    list_evaluators = {}
+    for fi, topic_file in enumerate(list_files):
+        print("Running topic:", topic_file)
 
-    for wi, week in enumerate(weeks[args.start_week - 1 :]):
-        print("Running week", wi)
-        list_evaluators.append({})
-        for topic_file in week:
-            print("Running topic:", topic_file)
+        if not os.path.exists(
+            os.path.join(args.save_dir, course_name, class_name, topic_file)
+        ):
+            print(f"Topic {topic_file} not found!")
+            continue
 
-            if not os.path.exists(
-                os.path.join(args.save_dir, course_name, class_name, topic_file)
-            ):
-                print(f"Topic {topic_file} not found!")
-                continue
-
-            # Load the questions and testcases
-            week_data = json.load(
-                open(
-                    os.path.join(args.save_dir, course_name, class_name, topic_file),
-                    "r",
-                )
+        # Load the questions and testcases
+        week_data = json.load(
+            open(
+                os.path.join(args.save_dir, course_name, class_name, topic_file),
+                "r",
             )
+        )
 
-            list_questions = week_data["list_questions"]
-            week_evaluators = []
-            for question_data in list_questions:
-                if isinstance(question_data, list):
-                    # The case of random question set
-                    question_set = []
-                    for subquestion in question_data:
-                        template = subquestion["template"]
-                        testcases = subquestion["testcases"]
-
-                        # Create the CPPEvaluator
-                        evaluator = CPPEvaluator(template, testcases, max_workers=4)
-                        question_set.append(evaluator)
-
-                    week_evaluators.append(question_set)
-                else:
-                    template = question_data["template"]
-                    testcases = question_data["testcases"]
+        list_questions = week_data["list_questions"]
+        week_evaluators = []
+        for question_data in list_questions:
+            if isinstance(question_data, list):
+                # The case of random question set
+                question_set = []
+                for subquestion in question_data:
+                    template = subquestion["template"]
+                    testcases = subquestion["testcases"]
 
                     # Create the CPPEvaluator
                     evaluator = CPPEvaluator(template, testcases, max_workers=4)
-                    week_evaluators.append(evaluator)
+                    question_set.append(evaluator)
 
-            list_evaluators[wi][topic_file] = week_evaluators
+                week_evaluators.append(question_set)
+            else:
+                template = question_data["template"]
+                testcases = question_data["testcases"]
 
-            # Load the student answers
-            student_answers = week_data["student_answers"]
+                # Create the CPPEvaluator
+                evaluator = CPPEvaluator(template, testcases, max_workers=4)
+                week_evaluators.append(evaluator)
 
-            executables = []
-            with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-                # Submit all compilation tasks
-                futures = [
-                    executor.submit(process_one_student, sa) for sa in student_answers
-                ]
+        list_evaluators[topic_file] = week_evaluators
 
-                # Retrieve results as they complete
-                for future in tqdm(futures, desc="Testing student"):
-                    result = future.result()
-                    list_res.append(result)
+        # Load the student answers
+        student_answers = week_data["student_answers"]
 
-                wait(futures, return_when=ALL_COMPLETED)
+        executables = []
+        with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+            # Submit all compilation tasks
+            futures = [
+                executor.submit(process_one_student, sa) for sa in student_answers
+            ]
 
-            # Save the updated student answers
-            week_data["student_answers"] = student_answers
-            json.dump(
-                week_data,
-                open(
-                    os.path.join(args.save_dir, course_name, class_name, topic_file),
-                    "w",
-                ),
-            )
+            # Retrieve results as they complete
+            for future in tqdm(futures, desc="Testing student"):
+                result = future.result()
+                list_res.append(result)
 
-            print("Mean error:", sum(list_res) / len(list_res))
+            wait(futures, return_when=ALL_COMPLETED)
+
+        # Save the updated student answers
+        week_data["student_answers"] = student_answers
+        json.dump(
+            week_data,
+            open(
+                os.path.join(args.save_dir, course_name, class_name, topic_file),
+                "w",
+            ),
+        )
+
+        print("Mean error:", sum(list_res) / len(list_res))
