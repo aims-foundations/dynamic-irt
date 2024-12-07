@@ -286,8 +286,9 @@ if __name__ == "__main__":
 
     # Download and load data
     data_folder = snapshot_download(
-        repo_id=f"stair-lab/{args.course_name}_records_wtc", repo_type="dataset"
+        repo_id=f"stair-lab/code_insights_jsons", repo_type="dataset"
     )
+    data_folder = os.path.join(data_folder, args.course_name)
     directory_json_files = {}
     for folder in os.listdir(data_folder):
         if os.path.isdir(os.path.join(data_folder, folder)):
