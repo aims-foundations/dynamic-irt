@@ -123,8 +123,10 @@ class CPPEvaluator:
         except OSError as e:
             print("Error: %s - %s." % (e.filename, e.strerror))
 
-        return_results = {
+        if len(list_result) == 0:
+            return {"score": 0, "testcases": list_result}
+        
+        return {
             "score": sum(list_result) / len(list_result),
             "testcases": list_result,
         }
-        return return_results
