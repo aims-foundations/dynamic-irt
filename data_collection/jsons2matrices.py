@@ -267,8 +267,8 @@ def convert_to_tc_matrix(y_obs, is_exam_matrix, time_matrix, device):
         qidx_tc_obs.append(student_qidx)
         tidx_tc_obs.append(student_tidx)
 
-    y_obs = torch.tensor(y_tc_obs, device=device)
-    is_exam_obs = torch.tensor(is_exam_obs, device=device)
+    y_obs = torch.tensor(y_tc_obs, device=device, dtype=torch.int8)
+    is_exam_obs = torch.tensor(is_exam_obs, device=device, dtype=torch.int8)
     qidx_obs = torch.tensor(qidx_tc_obs, device=device)
     time_obs = torch.tensor(time_tc_obs, device=device)
     tidx_obs = torch.tensor(tidx_tc_obs, device=device)
@@ -313,6 +313,7 @@ if __name__ == "__main__":
     )
 
     upload_api = HfApi()
+    print("Uploading files...")
 
     sorted_question_infos = []
     for i in range(qidx_obs.shape[1]):
@@ -359,7 +360,7 @@ if __name__ == "__main__":
         path_in_repo=f"{args.course_name}/is_exam_matrix.pt",
         path_or_fileobj=is_exam_matrix_file,
     )
-    
+
     time_obs_file = io.BytesIO()
     torch.save(time_obs, time_obs_file)
     upload_api.upload_file(

@@ -2,7 +2,12 @@ import json
 import os
 import warnings
 from argparse import ArgumentParser
-from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import (
+    ALL_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    wait,
+)
 
 from llm_simulator.config import WEEK_FILES
 from llm_simulator.grading_engine.engine import CPPEvaluator
@@ -15,8 +20,7 @@ def preprocess_answer(answer):
     return answer
 
 
-def process_one_student(student_answer):
-    # for si, student_answer in enumerate(tqdm(student_answers, desc="Testing student")):
+def process_one_student(student_answer, list_evaluators):
     list_errors = []
     for qi, question in enumerate(student_answer["response_history"]):
         if "." in question["question"]:
@@ -43,7 +47,7 @@ def process_one_student(student_answer):
 
             if run_test:
                 answer = preprocess_answer(attempt["action"])
-                evaluator = list_evaluators[topic_file][qidx]
+                evaluator = list_evaluators[qidx]
                 if sub_qidx is not None:
                     evaluator = evaluator[sub_qidx]
 
@@ -90,21 +94,15 @@ if __name__ == "__main__":
     list_files = [x for x in list_files if x.endswith("json")]
     list_files = sorted(list_files)
 
-    # Loop on all weeks to create set of CPPEvaluator
-    # One CPPEvaluator corresponds to one question in one week
-    list_evaluators = []
-
     # >>> weeks x questions
-    list_res = []
-    list_evaluators = {}
-    for fi, topic_file in enumerate(list_files):
+    def process_one_topic(topic_file):
         print("Running topic:", topic_file)
 
         if not os.path.exists(
             os.path.join(args.save_dir, course_name, class_name, topic_file)
         ):
             print(f"Topic {topic_file} not found!")
-            continue
+            return
 
         # Load the questions and testcases
         week_data = json.load(
@@ -125,7 +123,7 @@ if __name__ == "__main__":
                     testcases = subquestion["testcases"]
 
                     # Create the CPPEvaluator
-                    evaluator = CPPEvaluator(template, testcases, max_workers=4)
+                    evaluator = CPPEvaluator(template, testcases, max_workers=16)
                     question_set.append(evaluator)
 
                 week_evaluators.append(question_set)
@@ -134,25 +132,25 @@ if __name__ == "__main__":
                 testcases = question_data["testcases"]
 
                 # Create the CPPEvaluator
-                evaluator = CPPEvaluator(template, testcases, max_workers=4)
+                evaluator = CPPEvaluator(template, testcases, max_workers=16)
                 week_evaluators.append(evaluator)
-
-        list_evaluators[topic_file] = week_evaluators
 
         # Load the student answers
         student_answers = week_data["student_answers"]
+        if "testcases" in student_answers[0]["response_history"][0]["results"][0]:
+            print("Already graded!")
+            return
 
-        executables = []
-        with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             # Submit all compilation tasks
             futures = [
-                executor.submit(process_one_student, sa) for sa in student_answers
+                executor.submit(process_one_student, sa, week_evaluators)
+                for sa in student_answers
             ]
 
             # Retrieve results as they complete
             for future in tqdm(futures, desc="Testing student"):
                 result = future.result()
-                list_res.append(result)
 
             wait(futures, return_when=ALL_COMPLETED)
 
@@ -166,4 +164,16 @@ if __name__ == "__main__":
             ),
         )
 
-        print("Mean error:", sum(list_res) / len(list_res))
+    with ProcessPoolExecutor(max_workers=args.max_workers) as executor:
+        # Submit all compilation tasks
+        futures = [
+            executor.submit(process_one_topic, topic_file) for topic_file in list_files
+        ]
+
+        # Retrieve results as they complete
+        for future in tqdm(futures, desc="Testing topic"):
+            result = future.result()
+
+        wait(futures, return_when=ALL_COMPLETED)
+
+    print("All done!")
