@@ -16,7 +16,16 @@ from selenium.webdriver.support.ui import WebDriverWait
 STARTING_TIME = datetime.strptime("1/9/23, 00:00:00", "%d/%m/%y, %H:%M:%S")
 
 
-def parse_time(time_str):
+def parse_time(time_str, course_name):
+    if course_name == "dsa_hk231":
+        STARTING_TIME = datetime.strptime("1/9/23, 00:00:00", "%d/%m/%y, %H:%M:%S")
+    elif course_name == "dsa_hk221":
+        STARTING_TIME = datetime.strptime("1/9/22, 00:00:00", "%d/%m/%y, %H:%M:%S")
+    elif course_name == "pf_hk222":
+        STARTING_TIME = datetime.strptime("1/1/23, 00:00:00", "%d/%m/%y, %H:%M:%S")
+    elif course_name == "pf_hk232":
+        STARTING_TIME = datetime.strptime("1/1/24, 00:00:00", "%d/%m/%y, %H:%M:%S")
+        
     # Parsing the string into a datetime object
     parsed_datetime = datetime.strptime(time_str, "%d/%m/%y, %H:%M:%S") - STARTING_TIME
     # Convert to days

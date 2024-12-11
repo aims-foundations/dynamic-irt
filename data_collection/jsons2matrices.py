@@ -185,7 +185,7 @@ def upload_files(repo_id, file_paths):
             print(f"Failed to upload {file_name}: {str(e)}")
 
 
-def convert_to_tc_matrix(y_obs, is_exam_matrix, time_matrix, device):
+def convert_to_tc_matrix(course_name, student_ids, y_obs, is_exam_matrix, time_matrix, device):
     # Number of questions
     n_question = len(y_obs[0])
 
@@ -211,20 +211,22 @@ def convert_to_tc_matrix(y_obs, is_exam_matrix, time_matrix, device):
     time_tc_obs = []
     qidx_tc_obs = []
     tidx_tc_obs = []
+    global_tidx = 0
+    for qidx in range(n_question):
+        for tidx in range(list_max_testcases[qidx]):
+            qidx_tc_obs.append(qidx)
+            tidx_tc_obs.append(global_tidx)
+            global_tidx += 1
+                
     for sidx, student in enumerate(tqdm(y_obs, desc="Preprocessing")):
         student_tc = []
         student_is_exam = []
         student_time = []
-        student_qidx = []
-        student_tidx = []
-        global_tidx = 0
         for qidx in range(n_question):
             for tidx in range(list_max_testcases[qidx]):
                 student_tc.append([])
                 student_is_exam.append([])
                 student_time.append([])
-                student_qidx.append([])
-                student_tidx.append([])
 
                 for aidx, attempt in enumerate(student[qidx]):
 
@@ -232,48 +234,63 @@ def convert_to_tc_matrix(y_obs, is_exam_matrix, time_matrix, device):
                         student_tc[-1].append(-1)
                         student_is_exam[-1].append(-1)
                         student_time[-1].append(-1)
-                        student_qidx[-1].append(-1)
-                        student_tidx[-1].append(-1)
                     else:
                         if len(attempt) == 0:
                             student_tc[-1].append(-1)
                             student_is_exam[-1].append(-1)
                             student_time[-1].append(-1)
-                            student_qidx[-1].append(-1)
-                            student_tidx[-1].append(-1)
                         elif (
                             tidx < len(attempt) and time_matrix[sidx][qidx][aidx] != ""
                         ):
                             student_tc[-1].append(attempt[tidx])
                             student_is_exam[-1].append(is_exam_matrix[sidx][qidx][aidx])
                             student_time[-1].append(
-                                parse_time(time_matrix[sidx][qidx][aidx])
+                                parse_time(time_matrix[sidx][qidx][aidx], course_name)
                             )
-                            student_qidx[-1].append(qidx)
-                            student_tidx[-1].append(global_tidx)
                         else:
                             student_tc[-1].append(-1)
                             student_is_exam[-1].append(-1)
                             student_time[-1].append(-1)
-                            student_qidx[-1].append(-1)
-                            student_tidx[-1].append(-1)
                             # raise ValueError("Testcase index out of bound")
-
-                global_tidx += 1
 
         y_tc_obs.append(student_tc)
         is_exam_obs.append(student_is_exam)
         time_tc_obs.append(student_time)
-        qidx_tc_obs.append(student_qidx)
-        tidx_tc_obs.append(student_tidx)
 
     y_obs = torch.tensor(y_tc_obs, device=device, dtype=torch.int8)
     is_exam_obs = torch.tensor(is_exam_obs, device=device, dtype=torch.int8)
-    qidx_obs = torch.tensor(qidx_tc_obs, device=device)
     time_obs = torch.tensor(time_tc_obs, device=device)
-    tidx_obs = torch.tensor(tidx_tc_obs, device=device)
+    qidx_obs = torch.tensor(qidx_tc_obs, device=device)
+    
+    # Remove students with no data
+    accept_idxs = []
+    for idx, row in enumerate(time_obs):
+        if row.mean() > -1:
+            accept_idxs.append(idx)
+            
+    y_obs = y_obs[accept_idxs]
+    time_obs = time_obs[accept_idxs]
+    is_exam_obs = is_exam_obs[accept_idxs]
+    student_ids = [student_ids[idx] for idx in accept_idxs]
+    
+    # Remove questions with no data
+    accept_idxs = []
+    for tidx in range(y_obs.size(1)):
+        all_submissions = y_obs[:, tidx, :]
+        all_submissions = all_submissions[all_submissions == -1]
+        if len(all_submissions) == 0:
+            continue
+        
+        mean = all_submissions.float().mean()
+        if mean != 0 and mean != 1:
+            accept_idxs.append(tidx)
+            
+    y_obs = y_obs[:, accept_idxs, :]
+    time_obs = time_obs[:, accept_idxs]
+    is_exam_obs = is_exam_obs[:, accept_idxs]
+    qidx_obs = qidx_obs[accept_idxs]
 
-    return y_obs, is_exam_obs, qidx_obs, time_obs, tidx_obs
+    return student_ids, y_obs, is_exam_obs, time_obs, qidx_obs
 
 
 if __name__ == "__main__":
@@ -308,20 +325,21 @@ if __name__ == "__main__":
         response_matrix,
     ) = format_dataset(data_folder, directory_json_files)
 
-    y_obs, is_exam_obs, qidx_obs, time_obs, tidx_obs = convert_to_tc_matrix(
-        correctness_bytc_matrix, is_exam_matrix, time_matrix, device
+    student_ids, y_obs, is_exam_obs, time_obs, qidx_obs = convert_to_tc_matrix(
+        args.course_name, student_ids, correctness_bytc_matrix, is_exam_matrix, time_matrix, device
     )
 
+    assert len(student_ids) == y_obs.size(0)
+    assert len(qidx_obs) == y_obs.size(1)
+    
     upload_api = HfApi()
     print("Uploading files...")
 
     sorted_question_infos = []
-    for i in range(qidx_obs.shape[1]):
-        qidx = qidx_obs[:, i].max()
-        if qidx != -1 or qidx >= len(question_infos):
-            sorted_question_infos.append(question_infos[qidx])
-        else:
-            sorted_question_infos.append({})
+    for qidx in qidx_obs:
+        qinfo = question_infos[qidx]
+        qinfo["qidx"] = qidx.item()
+        sorted_question_infos.append(qinfo)
 
     question_info_file = io.BytesIO()
     sorted_question_infos = pd.DataFrame(sorted_question_infos)
@@ -370,6 +388,7 @@ if __name__ == "__main__":
         path_or_fileobj=time_obs_file,
     )
 
+    #### ARCHIVED - REMOVE LATER ####
     # unique_questions_file = io.BytesIO()
     # pickle.dump(unique_questions, unique_questions_file)
     # upload_api.upload_file(
@@ -395,22 +414,4 @@ if __name__ == "__main__":
     #     repo_type="dataset",
     #     path_in_repo=f"{args.course_name}/response_matrix.pkl",
     #     path_or_fileobj=response_matrix_file,
-    # )
-
-    # qidx_obs_file = io.BytesIO()
-    # torch.save(qidx_obs, qidx_obs_file)
-    # upload_api.upload_file(
-    #     repo_id=f"stair-lab/code_insights_matrices",
-    #     repo_type="dataset",
-    #     path_in_repo=f"{args.course_name}/question_idx_matrix.pt",
-    #     path_or_fileobj=qidx_obs_file
-    # )
-
-    # tidx_obs_file = io.BytesIO()
-    # torch.save(tidx_obs, tidx_obs_file)
-    # upload_api.upload_file(
-    #     repo_id=f"stair-lab/code_insights_matrices",
-    #     repo_type="dataset",
-    #     path_in_repo=f"{args.course_name}/testcase_idx_matrix.pt",
-    #     path_or_fileobj=tidx_obs_file,
     # )

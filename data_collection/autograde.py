@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+import wandb
 from argparse import ArgumentParser
 from concurrent.futures import (
     ALL_COMPLETED,
@@ -47,6 +48,11 @@ def process_one_student(student_answer, list_evaluators):
 
             if run_test:
                 answer = preprocess_answer(attempt["action"])
+                if qidx >= len(list_evaluators):
+                    print(
+                        f"Question {qidx} not found in the list of evaluators. Skipping..."
+                    )
+                    continue
                 evaluator = list_evaluators[qidx]
                 if sub_qidx is not None:
                     evaluator = evaluator[sub_qidx]
@@ -80,6 +86,7 @@ def process_one_student(student_answer, list_evaluators):
 
 
 if __name__ == "__main__":
+    wandb.init(project="llm-simulator")
     parser = ArgumentParser()
     parser.add_argument("--course_name", type=str, default="dsa_hk231")
     parser.add_argument("--class_name", type=str, default="CC01")
@@ -177,3 +184,4 @@ if __name__ == "__main__":
         wait(futures, return_when=ALL_COMPLETED)
 
     print("All done!")
+    wandb.finish()
