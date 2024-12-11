@@ -1,304 +1,189 @@
+import os
 import argparse
-import pickle
-
 import torch
-import wandb
-
-from es_sampler import GibbsESSampler, IRTLikelihood
-from gpytorch.distributions import MultivariateNormal
-from gpytorch.kernels import MaternKernel, RBFKernel
-
 from huggingface_hub import snapshot_download
-from torch.distributions import Normal
-from tqdm import tqdm
-from utils import ensure_dir, plot_prior_distribution, set_seed
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+import pyro
+import logging
+import pyro.distributions as dist
+from pyro.infer import MCMC, NUTS
+import pyro.contrib.gp as gp
+
+# MAY NEED TO CHANGE THIS FUNTION TO IRT REPO
+def irt_1d_1pl(ability, difficulty):
+    return torch.sigmoid(ability + difficulty)
+
+def irt_pyro_model(
+    response_matrix, 
+    observation_mask,
+    time_index_matrix,
+    ability_priors, 
+    difficulty_prior,
+):
+    # Initialize parameters
+    difficulty = pyro.sample(
+        "difficulty",
+        difficulty_prior
+    )
+    
+    abilities = []
+    for sid, (ability_prior, time_index) in enumerate(zip(ability_priors, time_index_matrix)):
+        ab = pyro.sample(
+            f"ability_{sid}",
+            ability_prior
+        )
+        abilities.append(ab[time_index])
+    abilities = torch.stack(abilities)
+
+    prob_matrix = irt_1d_1pl(abilities, difficulty[:, None])[observation_mask]
+    y = pyro.sample("y", dist.Bernoulli(prob_matrix), obs=response_matrix)
+    return y
 
 
-def compute_max_testcases(y_obs, n_question):
-    print("Computing maximum number of testcases for each question")
-    list_max_testcases = {}
-    for qidx in range(n_question):
-        list_max_testcases[qidx] = 0
-        for student in y_obs:
-            list_n_testcases = []
-            for x in student[qidx]:
-                if not isinstance(x, int):
-                    list_n_testcases.append(len(x))
-                else:
-                    list_n_testcases.append(0)
-            list_max_testcases[qidx] = max(
-                list_max_testcases[qidx], max(list_n_testcases)
-            )
-    return list_max_testcases
-
-
-def load_data(data_folder, smoke_test, test_split=0.2):
-    y_obs = pickle.load(open(f"{data_folder}/correctness_bytc_matrix.pkl", "rb"))
-    # u_obs has shape of n_student x n_question x n_attempt x n_testcase
-    # The number of testcases can be different for each question
-
-    # Number of questions
-    n_question = len(y_obs[0])
-
-    # Compute maximum number of testcases for each question
-    list_max_testcases = compute_max_testcases(y_obs, n_question)
-    total_testcases = sum(list_max_testcases.values())
-
-    print("Loading preprocessed data")
-    y_obs = torch.load("data/y_obs.pt")
-    qidx_obs = torch.load("data/tidx_obs.pt")
-    time_obs = torch.load("data/time_obs.pt")
-
-    y_obs = torch.flatten(y_obs, start_dim=1)
-    qidx_obs = torch.flatten(qidx_obs, start_dim=1)
-    time_obs = torch.flatten(time_obs, start_dim=1)
-
-    n_student = len(y_obs)
-    first_idx = torch.arange(start=0, end=n_student).reshape(-1, 1)
-    sorted_idx = torch.argsort(time_obs, dim=1)
-    y_obs = y_obs[first_idx, sorted_idx]
-    qidx_obs = qidx_obs[first_idx, sorted_idx]
-    time_obs = time_obs[first_idx, sorted_idx]
-
-    if smoke_test:
-        n_student = 2
-        y_obs = y_obs[:n_student]
-        qidx_obs = qidx_obs[:n_student]
-        time_obs = time_obs[:n_student]
-
-    masked_idx = y_obs != -1
-
-    # Create y_train
-    print("Splitting train and test data")
-    num_train = int((1 - test_split) * n_student)
-    y_train = []
-    y_test = []
-    for sidx in range(n_student):
-        if masked_idx[sidx].sum() == 0:
-            continue
-
-        if sidx < num_train:
-            y_train.append(y_obs[sidx][masked_idx[sidx]])
-        else:
-            y_test.append(y_obs[sidx][masked_idx[sidx]])
-    y_train = torch.concatenate(y_train).float()
-    y_test = torch.concatenate(y_test).float()
-
-    unique_time_obs = []
-    aidx_obs = []  # student attempt index
-    for tidx, time_ob in enumerate(time_obs):
-        uni_time = time_ob.unique()
-        aidx_ob = torch.searchsorted(uni_time, time_ob)
-        # Replace the last element with -1
-        aidx_ob[aidx_ob == len(uni_time) - 1] = -1
-        aidx_obs.append(aidx_ob)
-        unique_time_obs.append(uni_time[:-1])
-
-    # Create index vectors for students and testcases
-    list_available_sidx = []
-    list_saidx = []
-    list_sqidx = []
-    train_test_split_idx = 0
-    student_idxs = []
-    for sidx in range(n_student):
-        if masked_idx[sidx].sum() == 0:
-            list_saidx.append(None)
-            # list_sqidx.append(None)
-            continue
-
-        saidx = aidx_obs[sidx][masked_idx[sidx]]  # attemp index for student
-        list_saidx.append(saidx)
-        list_available_sidx.append(sidx)
-
-        sqidx = qidx_obs[sidx][masked_idx[sidx]]  # global testcase index
-        list_sqidx.append(sqidx)
-
-        student_idxs.extend([sidx] * saidx.shape[0])
-
-        if sidx < num_train:
-            train_test_split_idx += saidx.shape[0]
-
-    student_idxs = torch.tensor(student_idxs)
-    all_squidx = torch.cat(list_sqidx)
-
-    # Save student indexes
-    with open(f"{result_folder}/student_idxs.pkl", "wb") as f:
-        pickle.dump(student_idxs, f)
-
-    # Save student saidx indexes
-    with open(f"{result_folder}/list_saidx.pkl", "wb") as f:
-        pickle.dump(list_saidx, f)
-
-    # Save all squidx indexes
-    with open(f"{result_folder}/all_squidx.pkl", "wb") as f:
-        pickle.dump(all_squidx, f)
-
-    # Save list of available student indexes
-    with open(f"{result_folder}/list_available_sidx.pkl", "wb") as f:
-        pickle.dump(list_available_sidx, f)
-
-    # Reverse the attempt indexes of students
-    print("Reverse the attempt indexes of students")
-    list_saidx2aidx = []
-    for sidx in range(n_student):
-        if masked_idx[sidx].sum() == 0:
-            list_saidx2aidx.append(None)
-            continue
-
-        saidx2aidx = []
-        for aidx in list_saidx[sidx].unique().sort()[0]:
-            saidx2aidx.append(torch.where(list_saidx[sidx] == aidx)[0][0])
-
-        list_saidx2aidx.append(torch.tensor(saidx2aidx))
-
-    # Save attempt indexes
-    with open(f"{result_folder}/list_saidx2aidx.pkl", "wb") as f:
-        pickle.dump(list_saidx2aidx, f)
-
-    return (
-        n_question,
-        n_student,
-        num_train,
-        total_testcases,
-        y_train,
-        y_test,
-        unique_time_obs,
-        list_saidx,
-        all_squidx,
-        student_idxs,
-        list_saidx2aidx,
-        train_test_split_idx,
-        masked_idx,
+def infer_hmc(args, model, response_matrix, time_matrix):
+    logging.info("Running inference...")
+    kernel = NUTS(
+        model,
+        max_tree_depth=args.max_tree_depth,
+        jit_compile=args.jit,
+        ignore_jit_warnings=True,
     )
 
+    # We'll define a hook_fn to log potential energy values during inference.
+    # This is helpful to diagnose whether the chain is mixing.
+    energies = []
 
-def get_theta_priors(unique_time_obs, sidx, npoints, kernel, length_scale):
-    time_obs_s = unique_time_obs[sidx]
-    points = torch.linspace(
-        unique_time_obs[sidx].min(),
-        unique_time_obs[sidx].max(),
-        npoints,
-        device=device,
-    )
-    time_obs_s = torch.cat([time_obs_s, points])
-    time_obs_s = time_obs_s.reshape(-1, 1)
-    if kernel == "Matern":
-        kernel = MaternKernel(nu=2.5).to(device)
-    elif kernel == "RBF":
-        kernel = RBFKernel().to(device)
-        kernel._set_lengthscale(length_scale)
-    else:
-        raise ValueError("Invalid kernel type")
+    def hook_fn(kernel, *unused):
+        e = float(kernel._potential_energy_last)
+        energies.append(e)
+        if args.verbose:
+            logging.info("potential = {:0.6g}".format(e))
 
-    covar = kernel(time_obs_s)
-    return MultivariateNormal(
-        torch.zeros(covar.shape[0], device=device), covariance_matrix=covar
+    mcmc = MCMC(
+        kernel,
+        hook_fn=hook_fn,
+        num_samples=args.num_samples,
+        warmup_steps=args.warmup_steps,
     )
 
+    # Compute some shapes
+    n_testtakers = response_matrix.shape[0]
+    n_questions_testcases = response_matrix.shape[1]
+    obs_mask = response_matrix != -1
 
-if __name__ == "__main__":
-    # wandb.init(project="code_insights")
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--course_name", help="Course Name", type=str, default="dsa_hk231"
-    )
-    parser.add_argument("--seed", help="Random seed", type=int, default=42)
-    parser.add_argument("--epochs", help="Number of epochs", type=int, default=100000)
-    parser.add_argument(
-        "--continue_iter", help="Continue sampling", type=int, default=0
-    )
-    parser.add_argument(
-        "--kernel",
-        help="Prior Kernel",
-        type=str,
-        default="RBF",
-        choices=["RBF", "Matern"],
-    )
-    parser.add_argument("--npoints", type=int, default=500)
-    parser.add_argument("--length_scale", help="Length scale", type=float, default=50.0)
-    parser.add_argument("--smoke_test", help="Enable smoke test", action="store_true")
-    args = parser.parse_args()
+    # Define difficulty prior
+    difficulty_prior = dist.Normal(torch.zeros(n_questions_testcases, device=device), torch.ones(n_questions_testcases, device=device))
 
-    set_seed(args.seed)
-    result_folder = f"results/{args.course_name}_seed{args.seed}_npoints{args.npoints}_kernel{args.kernel}_lengthscale{args.length_scale}"
+    # Define ability priors
+    ## We could use batching here because each student has a different number of attempts
+    ability_priors = []
+    time_index_matrix = []
+    for sidx in range(n_testtakers):
+        student_time_vec = time_matrix[sidx].unique()
+        
+        # Get the time index for each attempt
+        time_index = torch.searchsorted(student_time_vec, time_matrix[sidx])
+        ### REMEMBER: time_index is 0-indexed. Element 0 is -1
+        ### We need to subtract 1 to get the correct index
+        time_index_matrix.append(time_index - 1)
 
-    ensure_dir(result_folder)
-    data_folder = snapshot_download(
-        repo_id=f"stair-lab/{args.course_name}_wtc", repo_type="dataset"
-    )
-
-    # Load data
-    (
-        n_question,
-        n_student,
-        num_train,
-        total_testcases,
-        y_train,
-        y_test,
-        unique_time_obs,
-        list_saidx,
-        all_squidx,
-        student_idxs,
-        list_saidx2aidx,
-        train_test_split_idx,
-        masked_idx,
-    ) = load_data(data_folder, args.smoke_test)
-
-    # Create normal prior distribution for theta,
-    # where each theta_i is corresponding to a student at a specific time
-    print("Creating theta priors")
-    theta_priors = []
-    for sidx in range(n_student):
-        if masked_idx[sidx].sum() == 0:
-            theta_priors.append(None)
-            continue
-        theta_priors.append(
-            get_theta_priors(
-                unique_time_obs,
-                sidx,
-                npoints=args.npoints,
-                kernel=args.kernel,
-                length_scale=args.length_scale,
+        # Remove the first element since it is -1
+        student_time_vec = student_time_vec[1:]
+        
+        kernel = gp.kernels.RBF(input_dim=1, lengthscale=torch.tensor(7.0))
+        covar = kernel(student_time_vec) + 1e-3 * torch.eye(student_time_vec.shape[0], device=device) # Avoid numerical issues
+        ability_priors.append(
+            dist.MultivariateNormal(
+                torch.zeros(student_time_vec.shape[0], device=device),
+                covar
             )
         )
 
-    # Create normal prior distribution for z,
-    # where each z_i is corresponding to a testcase in a question
-    print("Creating z priors")
-    z_priors = Normal(
-        loc=torch.zeros((total_testcases,), device=device),
-        scale=torch.ones((total_testcases,), device=device),
+    # Run HMC
+    mcmc.run(
+        response_matrix=response_matrix[obs_mask],
+        observation_mask=obs_mask,
+        time_index_matrix=time_index_matrix,
+        ability_priors=ability_priors,
+        difficulty_prior=difficulty_prior,
     )
 
-    # Initialize sampler
-    ges_sampler = GibbsESSampler(
-        likelihood=IRTLikelihood,
-        theta_prior_dists=theta_priors,
-        z_prior_dists=z_priors,
-        y_train=y_train,
-        train_test_split_idx=train_test_split_idx,
-        list_saidx=list_saidx,
-        all_squidx=all_squidx,
-        unique_time_obs=unique_time_obs,
-        student_idxs=student_idxs,
-        list_saidx2aidx=list_saidx2aidx,
-        device=device,
-        n_points=args.npoints,
+    if args.plot:
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(6, 3))
+        plt.plot(energies)
+        plt.xlabel("MCMC step")
+        plt.ylabel("potential energy")
+        plt.title("MCMC energy trace")
+        plt.tight_layout()
+
+    samples = mcmc.get_samples()
+    return samples
+
+class PyroHMCArgs:
+    def __init__(self):
+        self.max_tree_depth = 10
+        self.num_samples = 1000
+        self.warmup_steps = 200
+        self.verbose = True
+        self.plot = True
+        self.jit = False
+        
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--course_name", type=str, default="dsa_hk231")
+    parser.add_argument("--method", type=str, default="hmc")
+    parser.add_argument("--smoke", action="store_true")
+    args = parser.parse_args()
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Download and load data
+    data_folder = snapshot_download(
+        repo_id=f"stair-lab/code_insights_matrices", repo_type="dataset"
+    )
+    data_folder = os.path.join(data_folder, args.course_name)
+    
+    # LOAD MATRICES
+    response_matrix = torch.load(
+        f"{data_folder}/correctness_matrix.pt"
+    ).to(device, dtype=torch.float32)
+    # >>> n_students x (n_questions * n_testcases) x n_max_attempts
+    
+    response_time_matrix = torch.load(
+        f"{data_folder}/time_matrix.pt"
+    ).to(device, dtype=torch.float32)
+    # >>> n_students x (n_questions * n_testcases) x n_max_attempts
+    
+    if args.smoke:
+        response_matrix = response_matrix[:2]
+        response_time_matrix = response_time_matrix[:2]
+    
+    hmc_args = PyroHMCArgs()
+    samples = infer_hmc(
+        args=hmc_args,
+        model=irt_pyro_model,
+        response_matrix=response_matrix,
+        time_matrix=response_time_matrix,
     )
 
-    ges_sampler.load_state(result_folder, continue_iter=args.continue_iter)
+    # Save samples
+    torch.save(samples, f"results/{args.course_name}.pt")
 
-    for epoch in tqdm(range(args.continue_iter, args.epochs), desc="Sampling"):
-        # Sampling for z
-        ges_sampler.sample(sampling_z=True)
-
-        # Sampling for theta
-        ges_sampler.sample(sampling_theta=True)
-
-        # Save thetas and zs
-        if (epoch + 1) % 1000 == 0:
-            ges_sampler.save_state(result_folder, epoch + 1)
-
-    # wandb.finish()
+    
+    ### OLD CODE ###
+    # irt_model = IRT(D=1, PL=1, low_rank_constraint="distinctGP", device=device)
+    
+    # irt_model.fit(
+    #     method="ess",
+    #     max_epoch=10000,
+    #     response_matrix=response_matrix,
+    #     response_time_matrix=response_time_matrix,
+    #     embedding=None,
+    #     model_features=None
+    # )
+    
+    # print("Saving model...")
+    # torch.save(irt_model.ability, "data/ability.pt")
+    # torch.save(irt_model.difficulty, "data/difficulty.pt")

@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
     # Save the student's x and y
     with open(
-        f"{result_folder}/student_{picked_sidx}_xy.pkl",
+        f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_xy.pkl",
         "wb",
     ) as f:
         pickle.dump((student_x, student_y), f)
@@ -196,14 +196,14 @@ if __name__ == "__main__":
 
     # Save thetas
     with open(
-        f"{result_folder}/student_{picked_sidx}_thetas.pkl",
+        f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_thetas.pkl",
         "wb",
     ) as f:
         pickle.dump(student_thetas, f)
 
     # Save points
     with open(
-        f"{result_folder}/student_{picked_sidx}_points.pkl",
+        f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_points.pkl",
         "wb",
     ) as f:
         pickle.dump(student_points, f)

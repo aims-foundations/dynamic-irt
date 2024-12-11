@@ -17,6 +17,7 @@ if __name__ == "__main__":
         "--course_name", help="Course Name", type=str, default="dsa_hk231"
     )
     parser.add_argument("--seed", help="Random seed", type=int, default=42)
+    parser.add_argument("--iteration", help="# Iteration", type=int, default=100000)
     parser.add_argument("--sidx", help="Student index", type=int, default=0)
     parser.add_argument(
         "--kernel",
@@ -58,22 +59,22 @@ if __name__ == "__main__":
         unique_time_obs.append(time_ob.unique()[:-1].cpu().numpy())
     picked_sidx = args.sidx
 
-    list_saidx = pickle.load(open(f"{result_folder}/list_saidx.pkl", "rb"))
+    list_saidx = pickle.load(open(f"{result_folder}/{args.course_name}_seed{args.seed}/list_saidx.pkl", "rb"))
     student_thetas = pickle.load(
         open(
-            f"{result_folder}/student_{picked_sidx}_thetas.pkl",
+            f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_thetas.pkl",
             "rb",
         )
     )
     student_points = pickle.load(
         open(
-            f"{result_folder}/student_{picked_sidx}_points.pkl",
+            f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_points.pkl",
             "rb",
         )
     )
     student_xs, student_ys = pickle.load(
         open(
-            f"{result_folder}/student_{picked_sidx}_xy.pkl",
+            f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_xy.pkl",
             "rb",
         )
     )
