@@ -46,9 +46,6 @@ if __name__ == "__main__":
         "question_id": [],
         "question_name": [],
         "question_text": [],
-        "testcase_input": [],
-        "testcase_std_input": [],
-        "testcase_output": [],
     }
 
     for course_id, course_name in enumerate(course_infos["course_name"]):
@@ -86,11 +83,7 @@ if __name__ == "__main__":
                         for sub_idx, sq in enumerate(q):
                             count_testcases = len(sq["testcases"])
 
-                            if (
-                                sq["name"] in question_infos["question_name"]
-                                and question_infos["question_name"].count(sq["name"])
-                                == count_testcases
-                            ):
+                            if sq["name"] in question_infos["question_name"]:
                                 question_global_idx = question_infos[
                                     "question_name"
                                 ].index(sq["name"])
@@ -105,30 +98,20 @@ if __name__ == "__main__":
                                     f"Question {idx + 1}.{sub_idx + 1}"
                                 ] = (question_global_idx, count_testcases)
 
+                                question_text = sq["question"] + "\n" + sq["template"]
                                 for tcid, tc in enumerate(sq["testcases"]):
-                                    question_infos["question_id"].append(
-                                        question_global_idx + tcid
-                                    )
-                                    question_infos["question_name"].append(sq["name"])
-                                    question_infos["question_text"].append(
-                                        sq["question"]
-                                    )
-                                    question_infos["testcase_input"].append(tc["input"])
-                                    question_infos["testcase_std_input"].append(
-                                        tc["std_input"]
-                                    )
-                                    question_infos["testcase_output"].append(
-                                        tc["output"]
-                                    )
+                                    question_text += f"\n\nInput: {tc['input']}\nSTD input: {tc['std_input']}\nOutput: {tc['output']}"
+
+                                question_infos["question_id"].append(
+                                    question_global_idx
+                                )
+                                question_infos["question_name"].append(sq["name"])
+                                question_infos["question_text"].append(question_text)
 
                     else:
                         count_testcases = len(q["testcases"])
 
-                        if (
-                            q["name"] in question_infos["question_name"]
-                            and question_infos["question_name"].count(q["name"])
-                            == count_testcases
-                        ):
+                        if q["name"] in question_infos["question_name"]:
                             question_global_idx = question_infos["question_name"].index(
                                 q["name"]
                             )
@@ -143,17 +126,13 @@ if __name__ == "__main__":
                                 count_testcases,
                             )
 
+                            question_text = q["question"] + "\n" + q["template"]
                             for tcid, tc in enumerate(q["testcases"]):
-                                question_infos["question_id"].append(
-                                    question_global_idx + tcid
-                                )
-                                question_infos["question_name"].append(q["name"])
-                                question_infos["question_text"].append(q["question"])
-                                question_infos["testcase_input"].append(tc["input"])
-                                question_infos["testcase_std_input"].append(
-                                    tc["std_input"]
-                                )
-                                question_infos["testcase_output"].append(tc["output"])
+                                question_text += f"\n\nInput: {tc['input']}\nSTD input: {tc['std_input']}\nOutput: {tc['output']}"
+
+                            question_infos["question_id"].append(question_global_idx)
+                            question_infos["question_name"].append(q["name"])
+                            question_infos["question_text"].append(question_text)
 
                 for answer in data_s:
                     student_uid = answer["id"]
@@ -187,16 +166,18 @@ if __name__ == "__main__":
                                 if result["action"].startswith(prefix):
                                     response = response.replace(prefix, "")
 
-                            for tcid, is_pass in enumerate(result["testcases"]):
-                                data_dict["student_id"].append(student_id)
-                                data_dict["course_id"].append(course_id)
-                                data_dict["section_id"].append(current_section_id)
-                                data_dict["question_unittest_id"].append(
-                                    question_global_idx + tcid
-                                )
-                                data_dict["attempt_id"].append(attempt_id)
-                                data_dict["response"].append(response)
-                                data_dict["pass"].append(is_pass)
+                            is_pass = [str(x) for x in result["testcases"]]
+                            is_pass = "".join(is_pass)
+
+                            data_dict["student_id"].append(student_id)
+                            data_dict["course_id"].append(course_id)
+                            data_dict["section_id"].append(current_section_id)
+                            data_dict["question_unittest_id"].append(
+                                question_global_idx
+                            )
+                            data_dict["attempt_id"].append(attempt_id)
+                            data_dict["response"].append(response)
+                            data_dict["pass"].append(is_pass)
 
     upload_api = HfApi()
     os.makedirs("results", exist_ok=True)
@@ -249,5 +230,4 @@ if __name__ == "__main__":
         repo_id=f"stair-lab/code_insights_csv",
         repo_type="dataset",
         path_in_repo="question_infos.csv",
-        path_or_fileobj=question_infos_file,
-    )
+        path_or_fileobj=question_infos_f
