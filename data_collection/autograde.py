@@ -1,7 +1,6 @@
 import json
 import os
 import warnings
-import wandb
 from argparse import ArgumentParser
 from concurrent.futures import (
     ALL_COMPLETED,
@@ -9,6 +8,8 @@ from concurrent.futures import (
     ThreadPoolExecutor,
     wait,
 )
+
+import wandb
 
 from llm_simulator.config import WEEK_FILES
 from llm_simulator.grading_engine.engine import CPPEvaluator
