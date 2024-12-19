@@ -25,7 +25,7 @@ def parse_time(time_str, course_name):
         STARTING_TIME = datetime.strptime("1/1/23, 00:00:00", "%d/%m/%y, %H:%M:%S")
     elif course_name == "pf_hk232":
         STARTING_TIME = datetime.strptime("1/1/24, 00:00:00", "%d/%m/%y, %H:%M:%S")
-        
+
     # Parsing the string into a datetime object
     parsed_datetime = datetime.strptime(time_str, "%d/%m/%y, %H:%M:%S") - STARTING_TIME
     # Convert to days
