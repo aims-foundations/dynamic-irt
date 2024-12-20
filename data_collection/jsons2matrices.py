@@ -64,6 +64,8 @@ def format_dataset(repo_id, directory_json_files):
 
             for answer in data_s["train"]:
                 student_id = answer["id"]
+                if student_id == "":
+                    continue
                 if student_id not in student_id_to_index:
                     student_id_to_index[student_id] = len(student_id_to_index)
 
@@ -117,6 +119,8 @@ def format_dataset(repo_id, directory_json_files):
                     )
 
             for answer in data_s["train"]:
+                if answer["id"] == "":
+                    continue
                 s_idx = student_id_to_index[answer["id"]]
                 if "class" not in student_ids[s_idx]:
                     student_ids[s_idx]["class"] = directory
@@ -185,7 +189,9 @@ def upload_files(repo_id, file_paths):
             print(f"Failed to upload {file_name}: {str(e)}")
 
 
-def convert_to_tc_matrix(course_name, student_ids, y_obs, is_exam_matrix, time_matrix, device):
+def convert_to_tc_matrix(
+    course_name, student_ids, y_obs, is_exam_matrix, time_matrix, device
+):
     # Number of questions
     n_question = len(y_obs[0])
 
@@ -217,7 +223,7 @@ def convert_to_tc_matrix(course_name, student_ids, y_obs, is_exam_matrix, time_m
             qidx_tc_obs.append(qidx)
             tidx_tc_obs.append(global_tidx)
             global_tidx += 1
-                
+
     for sidx, student in enumerate(tqdm(y_obs, desc="Preprocessing")):
         student_tc = []
         student_is_exam = []
@@ -261,18 +267,18 @@ def convert_to_tc_matrix(course_name, student_ids, y_obs, is_exam_matrix, time_m
     is_exam_obs = torch.tensor(is_exam_obs, device=device, dtype=torch.int8)
     time_obs = torch.tensor(time_tc_obs, device=device)
     qidx_obs = torch.tensor(qidx_tc_obs, device=device)
-    
+
     # Remove students with no data
     accept_idxs = []
     for idx, row in enumerate(time_obs):
         if row.mean() > -1:
             accept_idxs.append(idx)
-            
+
     y_obs = y_obs[accept_idxs]
     time_obs = time_obs[accept_idxs]
     is_exam_obs = is_exam_obs[accept_idxs]
     student_ids = [student_ids[idx] for idx in accept_idxs]
-    
+
     # Remove questions with no data
     accept_idxs = []
     for tidx in range(y_obs.size(1)):
@@ -280,11 +286,11 @@ def convert_to_tc_matrix(course_name, student_ids, y_obs, is_exam_matrix, time_m
         all_submissions = all_submissions[all_submissions == -1]
         if len(all_submissions) == 0:
             continue
-        
+
         mean = all_submissions.float().mean()
         if mean != 0 and mean != 1:
             accept_idxs.append(tidx)
-            
+
     y_obs = y_obs[:, accept_idxs, :]
     time_obs = time_obs[:, accept_idxs]
     is_exam_obs = is_exam_obs[:, accept_idxs]
@@ -326,12 +332,17 @@ if __name__ == "__main__":
     ) = format_dataset(data_folder, directory_json_files)
 
     student_ids, y_obs, is_exam_obs, time_obs, qidx_obs = convert_to_tc_matrix(
-        args.course_name, student_ids, correctness_bytc_matrix, is_exam_matrix, time_matrix, device
+        args.course_name,
+        student_ids,
+        correctness_bytc_matrix,
+        is_exam_matrix,
+        time_matrix,
+        device,
     )
 
     assert len(student_ids) == y_obs.size(0)
     assert len(qidx_obs) == y_obs.size(1)
-    
+
     upload_api = HfApi()
     print("Uploading files...")
 
