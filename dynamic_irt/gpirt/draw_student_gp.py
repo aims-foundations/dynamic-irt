@@ -1,9 +1,11 @@
 import argparse
+import os
 import pickle
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from huggingface_hub import snapshot_download
 from tueplots import bundles
 from utils import ensure_dir, moving_average, set_seed
 
@@ -26,16 +28,41 @@ if __name__ == "__main__":
         default="RBF",
         choices=["RBF", "Matern"],
     )
+    parser.add_argument("--D", type=int, default=1)
+    parser.add_argument("--PL", type=int, default=1)
+    parser.add_argument("--fitting_method", type=str, default="hmc")
     parser.add_argument("--npoints", type=int, default=500)
-    parser.add_argument("--length_scale", help="Length scale", type=float, default=50.0)
+    parser.add_argument("--length_scale", help="Length scale", type=float, default=1.0)
 
     args = parser.parse_args()
 
     set_seed(args.seed)
-    result_folder = f"results/{args.course_name}_seed{args.seed}_npoints{args.npoints}_kernel{args.kernel}_lengthscale{args.length_scale}"
+    result_folder = f"results/{args.course_name}_s{args.seed}_D{args.D}_PL{args.PL}_{args.fitting_method}_kernel{args.kernel}_ls{args.length_scale}"
     ensure_dir("plots/")
 
     #################################################################################
+
+    # Download and load data
+    data_folder = snapshot_download(
+        repo_id=f"stair-lab/code_insights_matrices", repo_type="dataset"
+    )
+    data_folder = os.path.join(data_folder, args.course_name)
+
+    # Load matrices
+    response_matrix = torch.load(f"{data_folder}/correctness_matrix.pt").to(
+        device, dtype=torch.float32
+    )
+    # >>> n_students x (n_questions * n_testcases) x n_max_attempts
+
+    response_time_matrix = torch.load(f"{data_folder}/time_matrix.pt").to(
+        device, dtype=torch.float32
+    )
+    # >>> n_students x (n_questions * n_testcases) x n_max_attempts
+
+    abilities = torch.load(f"{result_folder}/ability.pt")
+    difficulties = torch.load(f"{result_folder}/difficulty.pt").to(device)
+
+    breakpoint()
 
     y_obs = torch.load("data/y_obs.pt")
     time_obs = torch.load("data/time_obs.pt")
@@ -59,7 +86,9 @@ if __name__ == "__main__":
         unique_time_obs.append(time_ob.unique()[:-1].cpu().numpy())
     picked_sidx = args.sidx
 
-    list_saidx = pickle.load(open(f"{result_folder}/{args.course_name}_seed{args.seed}/list_saidx.pkl", "rb"))
+    list_saidx = pickle.load(
+        open(f"{result_folder}/{args.course_name}_seed{args.seed}/list_saidx.pkl", "rb")
+    )
     student_thetas = pickle.load(
         open(
             f"{result_folder}/{args.course_name}_seed{args.seed}/student_{picked_sidx}_thetas.pkl",
