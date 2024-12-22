@@ -91,10 +91,12 @@ if __name__ == "__main__":
     student_times = (
         response_time_matrix[args.sidx, observation_mask[args.sidx]].cpu().numpy()
     )
+    time_sort_idx = np.argsort(student_times)
     plt.figure()
     plt.scatter(
         student_times,
         response_matrix[args.sidx, observation_mask[args.sidx]].cpu().numpy() * 6 - 3,
+        s=5,
     )
 
     ability = abilities[args.sidx]
@@ -102,7 +104,14 @@ if __name__ == "__main__":
         plt.scatter(
             student_times,
             ability[saidx, response_time_indexes[args.sidx]].cpu().numpy(),
+            color="gray",
+            s=5,
         )
+    plt.plot(
+        student_times[time_sort_idx],
+        ability.mean(0)[response_time_indexes[args.sidx]][time_sort_idx].cpu().numpy(),
+        color="green",
+    )
 
     # Plot week lines
     min_time = student_times.min().item()
@@ -117,6 +126,7 @@ if __name__ == "__main__":
     plt.xlabel("Time (Days)")
     plt.ylabel("Correctness/Ability")
     plt.title(f"Student {args.sidx}'s Correctness and Ability")
+    # plt.xlim(min_time-0.01, min_time+0.1)
     plt.savefig(
         f"{plot_folder}/student{args.sidx}_correctness_ability.png",
         dpi=300,
