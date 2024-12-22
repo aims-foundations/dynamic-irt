@@ -65,14 +65,6 @@ class IRTBayes(nn.Module):
                 disciminatory * (ability * loading_factor).sum(-1) + difficulty
             )
 
-    def log_likelihood(self, *args, **kwargs):
-        probs = self.compute_prob(*args, **kwargs)
-        return (
-            torch.distributions.Bernoulli(probs=probs)
-            .log_prob(self.flat_response_matrix)
-            .sum()
-        )
-
     def init_parameters(
         self,
         response_matrix,
