@@ -22,6 +22,9 @@ if __name__ == "__main__":
         "section_id": [],
         "question_unittest_id": [],
         "attempt_id": [],
+        "timestamp": [],
+        "is_exam": [],
+        "response_type": [],
         "response": [],
         "pass": [],
     }
@@ -43,9 +46,14 @@ if __name__ == "__main__":
     }
 
     question_infos = {
+        "course_id": [],
         "question_id": [],
+        "week": [],
+        "topic": [],
         "question_name": [],
         "question_text": [],
+        "question_template": [],
+        "question_unittests": [],
     }
 
     for course_id, course_name in enumerate(course_infos["course_name"]):
@@ -71,6 +79,11 @@ if __name__ == "__main__":
 
             for json_file in json_files:
                 print(f"Processing {course_name}/{section_name}/{json_file}")
+                sep_idx = json_file.find("_")
+                week = int(json_file[1:sep_idx])
+                topic = json_file[sep_idx + 1 : -5].strip()
+                is_exam = int("exam" in topic.lower())
+
                 with open(os.path.join(data_folder, section_name, json_file), "r") as f:
                     data = json.load(f)
 
@@ -98,15 +111,24 @@ if __name__ == "__main__":
                                     f"Question {idx + 1}.{sub_idx + 1}"
                                 ] = (question_global_idx, count_testcases)
 
-                                question_text = sq["question"] + "\n" + sq["template"]
+                                unittests = ""
                                 for tcid, tc in enumerate(sq["testcases"]):
-                                    question_text += f"\n\nInput: {tc['input']}\nSTD input: {tc['std_input']}\nOutput: {tc['output']}"
+                                    unittests += f"Unittest {tcid}:\nInput: {tc['input']}\nSTD input: {tc['std_input']}\nOutput: {tc['output']}"
+                                    if tcid != len(sq["testcases"]) - 1:
+                                        unittests += "\n\n"
 
+                                question_infos["course_id"].append(course_id)
                                 question_infos["question_id"].append(
                                     question_global_idx
                                 )
+                                question_infos["week"].append(week)
+                                question_infos["topic"].append(topic)
                                 question_infos["question_name"].append(sq["name"])
-                                question_infos["question_text"].append(question_text)
+                                question_infos["question_text"].append(sq["question"])
+                                question_infos["question_template"].append(
+                                    sq["template"]
+                                )
+                                question_infos["question_unittests"].append(unittests)
 
                     else:
                         count_testcases = len(q["testcases"])
@@ -126,13 +148,20 @@ if __name__ == "__main__":
                                 count_testcases,
                             )
 
-                            question_text = q["question"] + "\n" + q["template"]
+                            unittests = ""
                             for tcid, tc in enumerate(q["testcases"]):
-                                question_text += f"\n\nInput: {tc['input']}\nSTD input: {tc['std_input']}\nOutput: {tc['output']}"
+                                unittests += f"Unittest {tcid}:\nInput: {tc['input']}\nSTD input: {tc['std_input']}\nOutput: {tc['output']}"
+                                if tcid != len(q["testcases"]) - 1:
+                                    unittests += "\n\n"
 
+                            question_infos["course_id"].append(course_id)
                             question_infos["question_id"].append(question_global_idx)
+                            question_infos["week"].append(week)
+                            question_infos["topic"].append(topic)
                             question_infos["question_name"].append(q["name"])
-                            question_infos["question_text"].append(question_text)
+                            question_infos["question_text"].append(q["question"])
+                            question_infos["question_template"].append(q["template"])
+                            question_infos["question_unittests"].append(unittests)
 
                 for answer in data_s:
                     student_uid = answer["id"]
@@ -153,18 +182,26 @@ if __name__ == "__main__":
                             continue
 
                         for attempt_id, result in enumerate(
-                            response_history["results"][1:-1]
+                            response_history["results"]
                         ):
-                            if (
-                                "testcases" not in result
-                                or len(result["testcases"]) != num_testcases
-                            ):
+                            if "testcases" not in result:
                                 continue
 
                             response = result["action"]
-                            for prefix in ["Prechecked: ", "Saved: ", "Submit: "]:
+                            response_type = ""
+                            for prefix in [
+                                "Started",
+                                "Prechecked: ",
+                                "Saved: ",
+                                "Submit: ",
+                                "Attempt finished submitting: {$a}",
+                            ]:
                                 if result["action"].startswith(prefix):
-                                    response = response.replace(prefix, "")
+                                    response = response.replace(prefix, "").strip()
+                                    if prefix == "Attempt finished submitting: {$a}":
+                                        response_type = "Finished"
+                                    else:
+                                        response_type = prefix.replace(":", "").strip()
 
                             is_pass = [str(x) for x in result["testcases"]]
                             is_pass = "".join(is_pass)
@@ -175,7 +212,10 @@ if __name__ == "__main__":
                             data_dict["question_unittest_id"].append(
                                 question_global_idx
                             )
+                            data_dict["is_exam"].append(is_exam)
+                            data_dict["timestamp"].append(result["time"])
                             data_dict["attempt_id"].append(attempt_id)
+                            data_dict["response_type"].append(response_type)
                             data_dict["response"].append(response)
                             data_dict["pass"].append(is_pass)
 
@@ -230,4 +270,5 @@ if __name__ == "__main__":
         repo_id=f"stair-lab/code_insights_csv",
         repo_type="dataset",
         path_in_repo="question_infos.csv",
-        path_or_fileobj=question_infos_f
+        path_or_fileobj=question_infos_file,
+    )
