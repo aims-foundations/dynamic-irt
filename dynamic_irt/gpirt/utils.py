@@ -6,6 +6,8 @@ from datetime import datetime
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pyro.contrib.gp as gp
+import pyro.distributions as dist
 import torch
 
 from Levenshtein import distance
@@ -74,6 +76,33 @@ def parse_score(header_text):
         return float(search_result.group(1))
     else:
         return None
+
+
+def get_ability_priors_pyro(
+    unique_time_vec, kernel, length_scale=1.0, npoints=0, device="cpu"
+):
+    uni_time = unique_time_vec.unsqueeze(-1).double()
+    if kernel == "Matern":
+        kernel = gp.kernels.Matern52(
+            input_dim=1, lengthscale=torch.tensor(length_scale)
+        ).double()
+    elif kernel == "RBF":
+        kernel = gp.kernels.RBF(
+            input_dim=1,
+            lengthscale=torch.tensor(length_scale),
+        ).double()
+    else:
+        raise ValueError("Invalid kernel type")
+
+    covar = kernel(uni_time) + 1e-4 * torch.eye(
+        uni_time.shape[0],
+        device=device,
+        dtype=torch.double,
+    )
+
+    return dist.MultivariateNormal(
+        torch.zeros(covar.shape[0], device=device, dtype=torch.double), covar
+    )
 
 
 def find_global_max(repo_id, course_name, class_name):

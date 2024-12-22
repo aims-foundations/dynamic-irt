@@ -3,8 +3,8 @@ import os
 import pickle
 
 import torch
-from amortized_irt import IRT
 from huggingface_hub import snapshot_download
+from irt_bayes import IRTBayes
 from utils import ensure_dir, set_seed
 
 if __name__ == "__main__":
@@ -17,6 +17,7 @@ if __name__ == "__main__":
     parser.add_argument("--D", type=int, default=1)
     parser.add_argument("--PL", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=120)
+    parser.add_argument("--warmup_steps", type=int, default=20)
     parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args()
 
@@ -46,13 +47,23 @@ if __name__ == "__main__":
         response_matrix = response_matrix[:2]
         response_time_matrix = response_time_matrix[:2]
 
-    # Fit IRT model
-    irt_model = IRT(
-        D=args.D, PL=args.PL, low_rank_constraint="distinctGP", device=device
+    # Initialize IRT model
+    irt_model = IRTBayes(
+        D=args.D,
+        PL=args.PL,
+        device=device,
+        low_rank_configs={
+            "type": "GP",
+            "kernel": args.kernel,
+            "length_scale": args.length_scale,
+        },
     )
+
+    # Fit IRT model
     return_obj = irt_model.fit(
         method=args.fitting_method,
         max_epoch=args.epochs,
+        warmup_steps=20,
         response_matrix=response_matrix,
         response_time_matrix=response_time_matrix,
         embedding=None,
