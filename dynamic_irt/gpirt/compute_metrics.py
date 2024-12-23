@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from huggingface_hub import snapshot_download
-from irt_bayes import IRTBayes
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -39,12 +38,8 @@ def compute_metrics(response_matrix, abilities, difficulties):
         for sidx in range(n_testtakers):
             ability = abilities[sidx][sample_idx]
             difficulty = difficulties[sample_idx, question_expanding_indexes[sidx]]
-            y_probs = IRTBayes.compute_prob(
-                ability,
-                difficulty,
-                disciminatory=1,
-                guessing=0,
-                loading_factor=1,
+            y_probs = torch.sigmoid(
+                ability + difficulty
             )
 
             y_preds = (y_probs > 0.5).float()
