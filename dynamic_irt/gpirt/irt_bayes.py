@@ -237,9 +237,6 @@ class IRTBayes(nn.Module):
         else:
             raise ValueError(f"{method} is not supported")
 
-    def forward(self):
-        raise NotImplementedError("Work in progress")
-
     def _irt_pyro_model(
         self,
         response_matrix: torch.Tensor,
@@ -319,21 +316,3 @@ class IRTBayes(nn.Module):
         self.difficulty = samples["difficulty"]
 
         return mcmc
-
-    def get_abilities(self):
-        return self.ability
-
-    def get_difficulties(self):
-        return self.difficulty
-
-    def get_disciminatory(self):
-        raise NotImplementedError("Work in progress")
-
-    def get_guessing(self):
-        raise NotImplementedError("Work in progress")
-
-    def get_loading_factor(self):
-        raise NotImplementedError("Work in progress")
-
-    def get_item_parameters(self):
-        raise NotImplementedError("Work in progress")
