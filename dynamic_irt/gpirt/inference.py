@@ -1,51 +1,66 @@
-import os
 import argparse
-import torch
-from huggingface_hub import snapshot_download
+import logging
+import os
+import pickle
+from typing import Tuple
 
 import pyro
-import logging
 import pyro.distributions as dist
-from pyro.infer import MCMC, NUTS
-import pyro.contrib.gp as gp
 
-# MAY NEED TO CHANGE THIS FUNTION TO IRT REPO
-def irt_1d_1pl(ability, difficulty):
-    return torch.sigmoid(ability + difficulty)
+import torch
+from huggingface_hub import snapshot_download
+from pyro.infer import MCMC, NUTS
+from utils import ensure_dir, preprocess, set_seed
+
 
 def irt_pyro_model(
-    response_matrix, 
-    observation_mask,
-    time_index_matrix,
-    ability_priors, 
-    difficulty_prior,
+    response_matrix: torch.Tensor,
+    ability_prior_dists,
+    item_prior_dists,
+    question_expanding_indexes,
+    response_time_indexes,
 ):
-    # Initialize parameters
-    difficulty = pyro.sample(
-        "difficulty",
-        difficulty_prior
-    )
-    
-    abilities = []
-    for sid, (ability_prior, time_index) in enumerate(zip(ability_priors, time_index_matrix)):
-        ab = pyro.sample(
-            f"ability_{sid}",
-            ability_prior
-        )
-        abilities.append(ab[time_index])
-    abilities = torch.stack(abilities)
+    # Initialize difficulty parameters
+    with pyro.plate("input_difficulty"):
+        difficulty = pyro.sample("difficulty", item_prior_dists)
+    difficulty = difficulty[question_expanding_indexes]
 
-    prob_matrix = irt_1d_1pl(abilities, difficulty[:, None])[observation_mask]
-    y = pyro.sample("y", dist.Bernoulli(prob_matrix), obs=response_matrix)
+    # Initialize ability parameters
+    abilities = []
+    for sid, (ability_prior, time_index) in enumerate(
+        zip(ability_prior_dists, response_time_indexes)
+    ):
+        ab = pyro.sample(f"ability_{sid}", ability_prior)
+        abilities.append(ab[time_index])
+    abilities = torch.cat(abilities)
+
+    # Compute probability matrix
+    prob_matrix = torch.sigmoid(abilities + difficulty)
+    with pyro.plate("output"):
+        y = pyro.sample("y", dist.Bernoulli(prob_matrix), obs=response_matrix)
+
     return y
 
 
-def infer_hmc(args, model, response_matrix, time_matrix):
+def infer_hmc(
+    max_epoch: int,
+    warmup_steps: int,
+    response_matrix: torch.Tensor,
+    all_indexes: Tuple,
+):
+    assert max_epoch > warmup_steps, "max_epoch should be greater than warmup_steps"
+    (
+        observation_mask,
+        response_time_indexes,
+        question_expanding_indexes,
+        ability_prior_dists,
+        item_prior_dists,
+    ) = all_indexes
     logging.info("Running inference...")
+
     kernel = NUTS(
-        model,
-        max_tree_depth=args.max_tree_depth,
-        jit_compile=args.jit,
+        irt_pyro_model,
+        jit_compile=True,
         ignore_jit_warnings=True,
     )
 
@@ -56,134 +71,104 @@ def infer_hmc(args, model, response_matrix, time_matrix):
     def hook_fn(kernel, *unused):
         e = float(kernel._potential_energy_last)
         energies.append(e)
-        if args.verbose:
-            logging.info("potential = {:0.6g}".format(e))
+        logging.info("potential = {:0.6g}".format(e))
 
     mcmc = MCMC(
         kernel,
         hook_fn=hook_fn,
-        num_samples=args.num_samples,
-        warmup_steps=args.warmup_steps,
+        num_samples=max_epoch - warmup_steps,
+        warmup_steps=warmup_steps,
     )
-
-    # Compute some shapes
-    n_testtakers = response_matrix.shape[0]
-    n_questions_testcases = response_matrix.shape[1]
-    obs_mask = response_matrix != -1
-
-    # Define difficulty prior
-    difficulty_prior = dist.Normal(torch.zeros(n_questions_testcases, device=device), torch.ones(n_questions_testcases, device=device))
-
-    # Define ability priors
-    ## We could use batching here because each student has a different number of attempts
-    ability_priors = []
-    time_index_matrix = []
-    for sidx in range(n_testtakers):
-        student_time_vec = time_matrix[sidx].unique()
-        
-        # Get the time index for each attempt
-        time_index = torch.searchsorted(student_time_vec, time_matrix[sidx])
-        ### REMEMBER: time_index is 0-indexed. Element 0 is -1
-        ### We need to subtract 1 to get the correct index
-        time_index_matrix.append(time_index - 1)
-
-        # Remove the first element since it is -1
-        student_time_vec = student_time_vec[1:]
-        
-        kernel = gp.kernels.RBF(input_dim=1, lengthscale=torch.tensor(7.0))
-        covar = kernel(student_time_vec) + 1e-3 * torch.eye(student_time_vec.shape[0], device=device) # Avoid numerical issues
-        ability_priors.append(
-            dist.MultivariateNormal(
-                torch.zeros(student_time_vec.shape[0], device=device),
-                covar
-            )
-        )
 
     # Run HMC
     mcmc.run(
-        response_matrix=response_matrix[obs_mask],
-        observation_mask=obs_mask,
-        time_index_matrix=time_index_matrix,
-        ability_priors=ability_priors,
-        difficulty_prior=difficulty_prior,
+        response_matrix=response_matrix[observation_mask],
+        ability_prior_dists=ability_prior_dists,
+        item_prior_dists=item_prior_dists,
+        question_expanding_indexes=question_expanding_indexes,
+        response_time_indexes=response_time_indexes,
     )
 
-    if args.plot:
-        import matplotlib.pyplot as plt
+    mcmc.summary()
 
-        plt.figure(figsize=(6, 3))
-        plt.plot(energies)
-        plt.xlabel("MCMC step")
-        plt.ylabel("potential energy")
-        plt.title("MCMC energy trace")
-        plt.tight_layout()
+    return mcmc
 
-    samples = mcmc.get_samples()
-    return samples
 
-class PyroHMCArgs:
-    def __init__(self):
-        self.max_tree_depth = 10
-        self.num_samples = 1000
-        self.warmup_steps = 200
-        self.verbose = True
-        self.plot = True
-        self.jit = False
-        
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--course_name", type=str, default="dsa_hk231")
-    parser.add_argument("--method", type=str, default="hmc")
+    parser.add_argument("--seed", help="Random seed", type=int, default=42)
+    parser.add_argument("--fitting_method", type=str, default="hmc")
+    parser.add_argument("--kernel", type=str, default="RBF")
+    parser.add_argument("--length_scale", type=float, default=1.0)
+    parser.add_argument("--D", type=int, default=1)
+    parser.add_argument("--PL", type=int, default=1)
+    parser.add_argument("--epochs", type=int, default=120)
+    parser.add_argument("--warmup_steps", type=int, default=20)
     parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args()
-    
+
+    set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+    result_folder = f"results/{args.course_name}_s{args.seed}_D{args.D}_PL{args.PL}_{args.fitting_method}_kernel{args.kernel}_ls{args.length_scale}"
+    ensure_dir(result_folder)
+
     # Download and load data
     data_folder = snapshot_download(
         repo_id=f"stair-lab/code_insights_matrices", repo_type="dataset"
     )
     data_folder = os.path.join(data_folder, args.course_name)
-    
-    # LOAD MATRICES
-    response_matrix = torch.load(
-        f"{data_folder}/correctness_matrix.pt"
-    ).to(device, dtype=torch.float32)
+
+    # Load matrices
+    response_matrix = torch.load(f"{data_folder}/correctness_matrix.pt").to(
+        device, dtype=torch.float32
+    )
     # >>> n_students x (n_questions * n_testcases) x n_max_attempts
-    
-    response_time_matrix = torch.load(
-        f"{data_folder}/time_matrix.pt"
-    ).to(device, dtype=torch.float32)
+
+    response_time_matrix = torch.load(f"{data_folder}/time_matrix.pt").to(
+        device, dtype=torch.float32
+    )
     # >>> n_students x (n_questions * n_testcases) x n_max_attempts
-    
+
     if args.smoke:
         response_matrix = response_matrix[:2]
         response_time_matrix = response_time_matrix[:2]
-    
-    hmc_args = PyroHMCArgs()
-    samples = infer_hmc(
-        args=hmc_args,
-        model=irt_pyro_model,
+
+    # Preprocess data
+    if os.path.exists(f"{result_folder}/all_indexes.pkl"):
+        all_indexes = pickle.load(open(f"{result_folder}/all_indexes.pkl", "rb"))
+    else:
+        with torch.no_grad():
+            all_indexes = preprocess(
+                response_matrix=response_matrix,
+                response_time_matrix=response_time_matrix,
+                low_rank_configs={
+                    "type": "GP",
+                    "kernel": args.kernel,
+                    "length_scale": args.length_scale,
+                },
+                device=device,
+            )
+        pickle.dump(all_indexes, open(f"{result_folder}/all_indexes.pkl", "wb"))
+
+    # Fit IRT model
+    return_obj = infer_hmc(
+        max_epoch=args.epochs,
+        warmup_steps=20,
         response_matrix=response_matrix,
-        time_matrix=response_time_matrix,
+        all_indexes=all_indexes,
     )
 
-    # Save samples
-    torch.save(samples, f"results/{args.course_name}.pt")
+    print("Saving parameters...")
+    samples = return_obj.get_samples()
+    ability = []
+    for sidx in range(response_matrix.shape[0]):
+        ability.append(samples[f"ability_{sidx}"])
+    torch.save(ability, f"{result_folder}/ability.pt")
 
-    
-    ### OLD CODE ###
-    # irt_model = IRT(D=1, PL=1, low_rank_constraint="distinctGP", device=device)
-    
-    # irt_model.fit(
-    #     method="ess",
-    #     max_epoch=10000,
-    #     response_matrix=response_matrix,
-    #     response_time_matrix=response_time_matrix,
-    #     embedding=None,
-    #     model_features=None
-    # )
-    
-    # print("Saving model...")
-    # torch.save(irt_model.ability, "data/ability.pt")
-    # torch.save(irt_model.difficulty, "data/difficulty.pt")
+    difficulty = samples["difficulty"]
+    torch.save(difficulty, f"{result_folder}/difficulty.pt")
+
+    sampling_diagnostic = return_obj.diagnostics()
+    with open(f"{result_folder}/sampling_diagnostic.pkl", "w") as f:
+        pickle.dump(sampling_diagnostic, f)
