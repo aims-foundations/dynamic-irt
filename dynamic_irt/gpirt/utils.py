@@ -9,8 +9,8 @@ import numpy as np
 import pyro.contrib.gp as gp
 import pyro.distributions as dist
 import torch
-
 from Levenshtein import distance
+from tqdm import tqdm
 from tueplots import bundles
 
 plt.rcParams.update(bundles.aaai2024())
@@ -102,6 +102,82 @@ def get_ability_priors_pyro(
 
     return dist.MultivariateNormal(
         torch.zeros(covar.shape[0], device=device, dtype=torch.double), covar
+    )
+
+
+def preprocess(
+    response_matrix,
+    response_time_matrix,
+    low_rank_configs,
+    device,
+):
+    n_students, n_questions = response_matrix.shape[:2]
+    if response_matrix.ndim == 3:
+        n_max_attempts = response_matrix.shape[2]
+
+    # response_time_matrix: n_students x n_questions x n_attempts
+    if low_rank_configs["type"] == "GP":
+        observation_mask = (response_matrix != -1).cpu()
+        response_time_indexes = []
+        question_expanding_indexes = []
+        ability_prior_dists = []
+
+        for sidx in tqdm(range(n_students), desc="Constructing indexes"):
+            uni_time = response_time_matrix[sidx].unique()
+            has_missing = 1 if -1 in uni_time else 0
+
+            # Get the time index for each attempt
+            time_index = (
+                torch.searchsorted(uni_time, response_time_matrix[sidx]) - has_missing
+            )
+            ### REMEMBER: time_index is 0-indexed. In case, element 0 is -1
+            ### We need to subtract 1 to get the correct index
+            response_time_indexes.append(time_index[time_index != -1])
+            question_expanding_indexes.append(
+                torch.arange(n_questions, device=device)[:, None].expand(
+                    -1, n_max_attempts
+                )[observation_mask[sidx]]
+            )
+
+            # Remove the first element since it is -1
+            uni_time = uni_time[has_missing:]
+            ability_prior_dists.append(
+                get_ability_priors_pyro(
+                    uni_time,
+                    kernel=low_rank_configs["kernel"],
+                    length_scale=low_rank_configs["length_scale"],
+                    device=device,
+                )
+            )
+
+        question_expanding_indexes = torch.concatenate(question_expanding_indexes).cpu()
+
+        question_observation_indexes = []
+        for qidx in tqdm(range(n_questions), desc="Constructing question indexes"):
+            question_observation_indexes.append(
+                torch.where(question_expanding_indexes == qidx)[0][0].item()
+            )
+        question_observation_indexes = torch.tensor(
+            question_observation_indexes, device="cpu"
+        )
+
+    else:
+        raise NotImplementedError("Work in progress")
+
+    if low_rank_configs["type"] == "GP":
+        item_prior_dists = dist.Normal(
+            torch.zeros(n_questions, device=device),
+            torch.ones(n_questions, device=device),
+        )
+    else:
+        raise NotImplementedError("Work in progress")
+
+    return (
+        observation_mask,
+        response_time_indexes,
+        question_expanding_indexes,
+        ability_prior_dists,
+        item_prior_dists,
     )
 
 
