@@ -1,14 +1,24 @@
 import logging
 
+import jax
+import jax.numpy as jnp
+import jax.random as random
+
+import numpyro
+import numpyro.distributions as dist_npr
+
 import pyro
 import pyro.distributions as dist
 
 import torch
 import torch.nn as nn
 from pyro.infer import MCMC, NUTS
+from numpyro.infer import MCMC, NUTS
+from numpyro.primitives import plate
+
 from tqdm import tqdm
 
-from utils import get_ability_priors_pyro
+from utils import get_ability_priors_numpyro, get_ability_priors_pyro
 
 
 class IRTBayes(nn.Module):
@@ -32,38 +42,6 @@ class IRTBayes(nn.Module):
                 "kernel": "RBF",
                 "length_scale": 1.0,
             }
-
-    @classmethod
-    def compute_prob(
-        cls,
-        ability,
-        difficulty,
-        disciminatory=None,
-        guessing=None,
-        loading_factor=None,
-    ):
-        ab_shape = list(ability.size())
-        df_shape = list(difficulty.size())
-        if disciminatory is None:
-            dc_shape = df_shape[:-1] + [ab_shape[-2]] + [df_shape[-1]]
-            disciminatory = torch.ones(dc_shape).to(ability)
-        if guessing is None:
-            gs_shape = df_shape[:-1] + [ab_shape[-2]] + [df_shape[-1]]
-            guessing = torch.zeros(gs_shape).to(ability)
-        if loading_factor is None:
-            lf_shape = ab_shape[:-1] + [1] + [ab_shape[-1]]
-            loading_factor = torch.ones(lf_shape).to(ability)
-
-        if ab_shape == df_shape:
-            return guessing + (1 - guessing) * torch.sigmoid(
-                disciminatory * (ability * loading_factor) + difficulty
-            )
-        else:
-            ability = ability[..., None, :]
-            difficulty = difficulty[..., None, :]
-            return guessing + (1 - guessing) * torch.sigmoid(
-                disciminatory * (ability * loading_factor).sum(-1) + difficulty
-            )
 
     def init_parameters(
         self,
@@ -257,11 +235,9 @@ class IRTBayes(nn.Module):
         abilities = torch.cat(abilities)
 
         # Compute probability matrix
-        prob_matrix = self.compute_prob(
-            abilities, difficulty, disciminatory=1, guessing=0, loading_factor=1
-        )
+        prob_matrix = torch.sigmoid(abilities + difficulty)
         with pyro.plate("output"):
-            y = pyro.sample("y", dist.Bernoulli(prob_matrix), obs=response_matrix)
+            y = pyro.sample("y", dist.Bernoulli(probs=prob_matrix), obs=response_matrix)
 
         return y
 
@@ -308,6 +284,224 @@ class IRTBayes(nn.Module):
         mcmc.summary()
 
         # Get samples
+        samples = mcmc.get_samples()
+        self.ability = []
+        for sidx in range(self.n_students):
+            self.ability.append(samples[f"ability_{sidx}"])
+
+        self.difficulty = samples["difficulty"]
+
+        return mcmc
+
+
+class IRTBayesJax:
+    def __init__(
+        self,
+        low_rank_configs=None,
+        D=1,
+        PL=1,
+        device="cpu",
+        report_to=None,
+    ):
+        super().__init__()
+        self.D = D
+        self.PL = PL
+        self.device = device
+        self.report_to = report_to
+        self.low_rank_configs = low_rank_configs
+        if low_rank_configs is None:
+            self.low_rank_configs = {
+                "type": "GP",
+                "kernel": "RBF",
+                "length_scale": 1.0,
+            }
+
+    def preprocess(
+        self,
+        response_matrix=None,
+        response_time_matrix=None,
+        fitting_method=None,
+        all_params=None,
+    ):
+        if all_params is None:
+            self.n_students, self.n_questions = response_matrix.shape[:2]
+            if response_matrix.ndim == 3:
+                self.n_max_attempts = response_matrix.shape[2]
+
+            if response_time_matrix is None:
+                raise NotImplementedError("Work in progress")
+
+            # response_time_matrix: n_students x n_questions x n_attempts
+            if self.low_rank_configs["type"] == "GP":
+                self.observation_mask = response_matrix != -1
+                self.response_time_indexes = []
+                self.student_observation_indexes = []
+                self.question_expanding_indexes = []
+                self.ability_prior_dists = []
+
+                for sidx in tqdm(range(self.n_students), desc="Constructing indexes"):
+                    uni_time = response_time_matrix[sidx].unique()
+                    has_missing = 1 if -1 in uni_time else 0
+
+                    # Get the time index for each attempt
+                    time_index = (
+                        torch.searchsorted(uni_time, response_time_matrix[sidx])
+                        - has_missing
+                    )
+                    ### REMEMBER: time_index is 0-indexed. In case, element 0 is -1
+                    ### We need to subtract 1 to get the correct index
+                    self.response_time_indexes.append(
+                        jnp.array(time_index[time_index != -1].cpu().numpy())
+                    )
+                    self.student_observation_indexes.extend(
+                        [sidx] * len(self.response_time_indexes[-1])
+                    )
+                    self.question_expanding_indexes.append(
+                        torch.arange(self.n_questions, device=self.device)[
+                            :, None
+                        ].expand(-1, self.n_max_attempts)[self.observation_mask[sidx]]
+                    )
+
+                    # Remove the first element since it is -1
+                    uni_time = uni_time[has_missing:]
+                    self.ability_prior_dists.append(
+                        get_ability_priors_numpyro(
+                            uni_time,
+                            kernel=self.low_rank_configs["kernel"],
+                            length_scale=self.low_rank_configs["length_scale"],
+                            device=self.device,
+                        )
+                    )
+
+                self.student_observation_indexes = torch.tensor(
+                    self.student_observation_indexes
+                ).cpu()
+
+                self.question_expanding_indexes = torch.concatenate(
+                    self.question_expanding_indexes
+                ).cpu()
+
+                self.question_observation_indexes = []
+                for qidx in tqdm(
+                    range(self.n_questions), desc="Constructing question indexes"
+                ):
+                    self.question_observation_indexes.append(
+                        torch.where(self.question_expanding_indexes == qidx)[0][
+                            0
+                        ].item()
+                    )
+                self.question_observation_indexes = torch.tensor(
+                    self.question_observation_indexes, device="cpu"
+                )
+
+                # Convert to jax array
+                self.observation_mask = jnp.array(self.observation_mask.cpu().numpy())
+                self.student_observation_indexes = jnp.array(
+                    self.student_observation_indexes.numpy()
+                )
+                self.question_expanding_indexes = jnp.array(
+                    self.question_expanding_indexes.numpy()
+                )
+                self.question_observation_indexes = jnp.array(
+                    self.question_observation_indexes.numpy()
+                )
+
+                self.ability = None
+            else:
+                raise NotImplementedError("Work in progress")
+
+            if self.D != 1:
+                raise NotImplementedError("Work in progress")
+
+            if self.PL != 1:
+                raise NotImplementedError("Work in progress")
+
+            if self.low_rank_configs["type"] == "GP":
+                if fitting_method == "hmc":
+                    self.item_prior_dists = dist_npr.Normal(
+                        jnp.zeros((self.n_questions,)),
+                        jnp.ones((self.n_questions,)),
+                    )
+                self.difficulty = None
+            else:
+                raise NotImplementedError("Work in progress")
+
+            return (
+                self.observation_mask,
+                self.response_time_indexes,
+                self.student_observation_indexes,
+                self.question_expanding_indexes,
+                self.question_observation_indexes,
+                self.ability_prior_dists,
+                self.item_prior_dists,
+            )
+        else:
+            (
+                self.observation_mask,
+                self.response_time_indexes,
+                self.student_observation_indexes,
+                self.question_expanding_indexes,
+                self.question_observation_indexes,
+                self.ability_prior_dists,
+                self.item_prior_dists,
+            ) = all_params
+            self.n_students, self.n_questions = self.observation_mask.shape[:2]
+            if self.observation_mask.ndim == 3:
+                self.n_max_attempts = self.observation_mask.shape[2]
+
+    def _irt_numpyro_model(
+        self,
+        response_matrix,
+    ):
+        with plate("input_difficulty", size=self.n_questions):
+            difficulty = numpyro.sample(
+                "difficulty",
+                self.item_prior_dists,
+            )
+        difficulty = difficulty[self.question_expanding_indexes]
+
+        # Initialize ability parameters
+        abilities = []
+        for sid, (ability_prior, time_index) in enumerate(
+            zip(self.ability_prior_dists, self.response_time_indexes)
+        ):
+            ab = numpyro.sample(f"ability_{sid}", ability_prior)
+            abilities.append(ab[time_index])
+        abilities = jnp.concat(abilities)
+
+        # Compute probability matrix
+        prob_matrix = jax.nn.sigmoid(abilities + difficulty)
+
+        with plate("output_y", size=len(response_matrix)):
+            numpyro.sample(
+                "y", dist_npr.Bernoulli(probs=prob_matrix), obs=response_matrix
+            )
+
+    def infer_hmc(
+        self,
+        max_epoch: int,
+        warmup_steps: int,
+        response_matrix: torch.Tensor,
+        response_time_matrix: torch.Tensor,
+        *args,
+        **kwargs,
+    ):
+        rng_key = random.PRNGKey(0)
+        rng_key, _ = random.split(rng_key)
+
+        nuts_kernel = NUTS(self._irt_numpyro_model)
+        mcmc = MCMC(
+            nuts_kernel,
+            num_samples=max_epoch,
+            num_warmup=warmup_steps,
+        )
+
+        mcmc.run(
+            rng_key,
+            response_matrix=response_matrix[self.observation_mask],
+        )
+        mcmc.print_summary()
+
         samples = mcmc.get_samples()
         self.ability = []
         for sidx in range(self.n_students):
