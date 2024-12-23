@@ -1,0 +1,188 @@
+import json
+import os
+import warnings
+from argparse import ArgumentParser
+from concurrent.futures import (
+    ALL_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    wait,
+)
+
+import wandb
+
+from llm_simulator.config import WEEK_FILES
+from llm_simulator.grading_engine.engine import CPPEvaluator
+from tqdm import tqdm
+
+
+def preprocess_answer(answer):
+    for prefix in ["Saved: ", "Prechecked: ", "Submit: "]:
+        answer = answer.replace(prefix, "")
+    return answer
+
+
+def process_one_student(student_answer, list_evaluators):
+    list_errors = []
+    for qi, question in enumerate(student_answer["response_history"]):
+        if "." in question["question"]:
+            dotidx = question["question"].rfind(".")
+            qidx = int(float(question["question"].split(" ")[-1])) - 1
+            sub_qidx = int(question["question"][dotidx + 1 :]) - 1
+        else:
+            qidx = int(question["question"].split(" ")[-1]) - 1
+            sub_qidx = None
+
+        for ai, attempt in enumerate(question["results"]):
+            run_test = False
+            if attempt["action"].startswith("Started") or attempt["action"].startswith(
+                "Attempt finished"
+            ):
+                pass
+            elif attempt["action"].startswith("Prechecked") or attempt[
+                "action"
+            ].startswith("Saved"):
+                if attempt["score"] != "":
+                    run_test = True
+            elif attempt["action"].startswith("Submit"):
+                run_test = True
+
+            if run_test:
+                answer = preprocess_answer(attempt["action"])
+                if qidx >= len(list_evaluators):
+                    print(
+                        f"Question {qidx} not found in the list of evaluators. Skipping..."
+                    )
+                    continue
+                evaluator = list_evaluators[qidx]
+                if sub_qidx is not None:
+                    evaluator = evaluator[sub_qidx]
+
+                student_results = evaluator.evaluate(answer)
+                if attempt["score"] == "":
+                    attempt["score"] = "0.0"
+
+                if student_results["score"] != float(attempt["score"]):
+                    # Raise warning
+                    warnings.warn(
+                        f"Score mismatch for {student_answer['id']}, question {qidx}. Expected: {attempt['score']}, Got: {student_results['score']}."
+                    )
+                    list_errors.append(
+                        abs(float(attempt["score"]) - student_results["score"])
+                    )
+                else:
+                    list_errors.append(0)
+
+                student_answer["response_history"][qi]["results"][ai]["testcases"] = (
+                    student_results["testcases"]
+                )
+            else:
+                student_answer["response_history"][qi]["results"][ai]["testcases"] = []
+
+    if len(list_errors) == 0:
+        return 0
+
+    print("error:", sum(list_errors) / len(list_errors))
+    return sum(list_errors) / len(list_errors)
+
+
+if __name__ == "__main__":
+    wandb.init(project="llm-simulator")
+    parser = ArgumentParser()
+    parser.add_argument("--course_name", type=str, default="dsa_hk231")
+    parser.add_argument("--class_name", type=str, default="CC01")
+    parser.add_argument("--max_workers", type=int, default=16)
+    parser.add_argument("--save_dir", type=str, default="../data")
+    args = parser.parse_args()
+
+    class_name = args.class_name
+    course_name = args.course_name
+
+    list_files = os.listdir(os.path.join(args.save_dir, course_name, class_name))
+    list_files = [x for x in list_files if x.endswith("json")]
+    list_files = sorted(list_files)
+
+    # >>> weeks x questions
+    def process_one_topic(topic_file):
+        print("Running topic:", topic_file)
+
+        if not os.path.exists(
+            os.path.join(args.save_dir, course_name, class_name, topic_file)
+        ):
+            print(f"Topic {topic_file} not found!")
+            return
+
+        # Load the questions and testcases
+        week_data = json.load(
+            open(
+                os.path.join(args.save_dir, course_name, class_name, topic_file),
+                "r",
+            )
+        )
+
+        list_questions = week_data["list_questions"]
+        week_evaluators = []
+        for question_data in list_questions:
+            if isinstance(question_data, list):
+                # The case of random question set
+                question_set = []
+                for subquestion in question_data:
+                    template = subquestion["template"]
+                    testcases = subquestion["testcases"]
+
+                    # Create the CPPEvaluator
+                    evaluator = CPPEvaluator(template, testcases, max_workers=16)
+                    question_set.append(evaluator)
+
+                week_evaluators.append(question_set)
+            else:
+                template = question_data["template"]
+                testcases = question_data["testcases"]
+
+                # Create the CPPEvaluator
+                evaluator = CPPEvaluator(template, testcases, max_workers=16)
+                week_evaluators.append(evaluator)
+
+        # Load the student answers
+        student_answers = week_data["student_answers"]
+        if "testcases" in student_answers[0]["response_history"][0]["results"][0]:
+            print("Already graded!")
+            return
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            # Submit all compilation tasks
+            futures = [
+                executor.submit(process_one_student, sa, week_evaluators)
+                for sa in student_answers
+            ]
+
+            # Retrieve results as they complete
+            for future in tqdm(futures, desc="Testing student"):
+                result = future.result()
+
+            wait(futures, return_when=ALL_COMPLETED)
+
+        # Save the updated student answers
+        week_data["student_answers"] = student_answers
+        json.dump(
+            week_data,
+            open(
+                os.path.join(args.save_dir, course_name, class_name, topic_file),
+                "w",
+            ),
+        )
+
+    with ProcessPoolExecutor(max_workers=args.max_workers) as executor:
+        # Submit all compilation tasks
+        futures = [
+            executor.submit(process_one_topic, topic_file) for topic_file in list_files
+        ]
+
+        # Retrieve results as they complete
+        for future in tqdm(futures, desc="Testing topic"):
+            result = future.result()
+
+        wait(futures, return_when=ALL_COMPLETED)
+
+    print("All done!")
+    wandb.finish()
