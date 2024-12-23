@@ -95,11 +95,11 @@ class IRTBayesTestingSingleAttempt(unittest.TestCase):
             amortized_question_hyperparams=None,
             amortized_model_hyperparams=None,
         )
-        ability = irt_model.get_abilities()
+        ability = irt_model.ability
         ability = torch.stack(ability)
         # >>> n_students x n_samples x ( n_questions * 1 )
 
-        difficulty = irt_model.get_difficulties()
+        difficulty = irt_model.difficulty
         # >>> n_samples x n_questions
 
         list_ability_spearman = []
