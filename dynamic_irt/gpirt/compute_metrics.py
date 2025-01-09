@@ -5,6 +5,8 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+
+from amortized_irt import IRT
 from huggingface_hub import snapshot_download
 from sklearn.metrics import (
     accuracy_score,
@@ -38,9 +40,7 @@ def compute_metrics(response_matrix, abilities, difficulties):
         for sidx in range(n_testtakers):
             ability = abilities[sidx][sample_idx]
             difficulty = difficulties[sample_idx, question_expanding_indexes[sidx]]
-            y_probs = torch.sigmoid(
-                ability + difficulty
-            )
+            y_probs = torch.sigmoid(ability + difficulty)
 
             y_preds = (y_probs > 0.5).float()
             y_true = response_matrix[sidx][observation_mask[sidx]]
@@ -104,7 +104,7 @@ def compute_gof(response_matrix, abilities, difficulties, bin_size=6):
                 ability_mask
             ]
 
-            y_theoretical = IRTBayes.compute_prob(
+            y_theoretical = IRT.compute_prob(
                 filtered_ability,
                 filtered_difficulty,
                 disciminatory=1,
