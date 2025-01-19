@@ -154,7 +154,7 @@ if __name__ == "__main__":
     # Fit IRT model
     return_obj = infer_hmc(
         max_epoch=args.epochs,
-        warmup_steps=20,
+        warmup_steps=args.warmup_steps,
         response_matrix=response_matrix,
         all_indexes=all_indexes,
     )
