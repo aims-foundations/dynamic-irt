@@ -5,7 +5,6 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-
 from amortized_irt import IRT
 from huggingface_hub import snapshot_download
 from sklearn.metrics import (
@@ -40,7 +39,13 @@ def compute_metrics(response_matrix, abilities, difficulties):
         for sidx in range(n_testtakers):
             ability = abilities[sidx][sample_idx]
             difficulty = difficulties[sample_idx, question_expanding_indexes[sidx]]
-            y_probs = torch.sigmoid(ability + difficulty)
+            y_probs = IRT.compute_prob(
+                ability,
+                difficulty,
+                disciminatory=1,
+                guessing=0,
+                loading_factor=1,
+            )
 
             y_preds = (y_probs > 0.5).float()
             y_true = response_matrix[sidx][observation_mask[sidx]]
