@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from huggingface_hub import snapshot_download
+from irt_bayes import IRTBayes
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
