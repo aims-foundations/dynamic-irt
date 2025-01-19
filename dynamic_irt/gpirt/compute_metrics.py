@@ -5,8 +5,8 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from amortized_irt import IRT
 from huggingface_hub import snapshot_download
-from irt_bayes import IRTBayes
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -39,7 +39,7 @@ def compute_metrics(response_matrix, abilities, difficulties):
         for sidx in range(n_testtakers):
             ability = abilities[sidx][sample_idx]
             difficulty = difficulties[sample_idx, question_expanding_indexes[sidx]]
-            y_probs = IRTBayes.compute_prob(
+            y_probs = IRT.compute_prob(
                 ability,
                 difficulty,
                 disciminatory=1,
@@ -109,7 +109,7 @@ def compute_gof(response_matrix, abilities, difficulties, bin_size=6):
                 ability_mask
             ]
 
-            y_theoretical = IRTBayes.compute_prob(
+            y_theoretical = IRT.compute_prob(
                 filtered_ability,
                 filtered_difficulty,
                 disciminatory=1,

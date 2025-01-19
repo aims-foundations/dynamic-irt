@@ -1,0 +1,200 @@
+---
+title: "Problem-by-problem Analysis"
+author: "Karen D. Wang"
+date: "2024-12-03"
+output: html_document
+---
+```{r}
+library(tidyverse)
+```
+
+```{r set-theme, echo=FALSE}
+theme_set(
+  theme_classic() + #set the theme 
+    theme(text = element_text(family = "Times", size = 14)) #set the default text size
+)
+```
+
+# Import Data
+```{r}
+# Get list of all CSV files in the 'csv_file' folder
+csv_files <- list.files(path = "csv_file", pattern = "*.csv", full.names = TRUE)
+
+# Extract file names without extension to use as dataframe names
+df_names <- tools::file_path_sans_ext(basename(csv_files))
+
+# Read CSV files and assign each to a separate dataframe in the global environment
+for(i in seq_along(csv_files)) {
+  assign(df_names[i], read.csv(csv_files[i]))
+}
+```
+
+# Check the marks achieved and number of steps taken by individual students
+```{r}
+# Create the processing function
+process_dataframe <- function(df, df_name) {
+  summary_data <- df %>%
+    # Filter out NA ids
+    filter(!is.na(id)) %>%
+    # Group by id and summarize
+    group_by(id) %>%
+    summarise(
+      max_step = if(all(is.na(step))) NA else max(step, na.rm = TRUE),
+      max_marks = if(all(is.na(marks))) NA else max(marks, na.rm = TRUE)
+    ) %>%
+    # Calculate overall maximums
+    filter(max_marks > 0) %>% 
+    summarise(
+      mean_step = round(mean(max_step, na.rm = TRUE), 0),
+      mean_marks = round(mean(max_marks, na.rm = TRUE), 3),
+      max_marks = max(max_marks, na.rm = TRUE),
+      n = n()
+    ) %>%
+    # Add dataframe name
+    mutate(dataframe = df_name) %>%
+    # Reorder columns to match desired output
+    select(dataframe, mean_step, mean_marks, max_marks, n)
+  
+  return(summary_data)
+}
+
+# Create empty list to store results
+all_summaries <- list()
+
+# Process each dataframe
+for(df_name in df_names) {
+  # Get the dataframe from its name using get()
+  current_df <- get(df_name)
+  # Process it and store result
+  all_summaries[[df_name]] <- process_dataframe(current_df, df_name)
+}
+
+# Combine all results into one dataframe
+final_summary <- bind_rows(all_summaries)
+write_csv(final_summary, "individual_questions_steps_and_scores.csv")
+```
+
+```{r}
+# Create overlaid bar plot
+ggplot(`df_data_L09_Sorting_(Advance)_Q2`, aes(x = step, y = edit_distance, group = id, fill = as.factor(id))) +
+  geom_bar(stat = "identity", position = "identity", alpha = 0.3) +
+  scale_fill_discrete(name = "ID", guide = "none") +
+  labs(
+    #title = "Code edit distance by step for Sorting_(Advanced)_Q2. Each color represents one student",
+    x = "Step",
+    y = "Edit Distance"
+  )
+ggsave("edit_distance_by_step.png")
+```
+```{r}
+# First, let's process the data to get max steps per ID
+summarized_steps <- `df_data_L09_Sorting_(Advance)_Q2` %>%
+  filter(!is.na(id)) %>%
+  group_by(id) %>%
+  summarise(max_step = max(step, na.rm = TRUE),
+            mean_edit_distance = mean(edit_distance, na.rm = TRUE),
+            marks = max(marks, na.rm = TRUE)) %>% 
+  filter(marks > 0)
+
+# Create the dotplot
+ggplot(summarized_steps, aes(x = max_step)) +
+  geom_dotplot(binwidth = 1, fill = "steelblue", alpha = 0.5,
+               stackratio = 1.5,
+               dotsize=1) +
+  labs(
+    #title = "Total number of steps taken by individual students. Each dot represents one student",
+    x = "Total Number of Steps",
+    y = "Count"
+  ) 
+ggsave("total_steps_sorting_q2.png")
+
+# Calculate correlation
+cor_value <- cor(summarized_steps$max_step, summarized_steps$mean_edit_distance, 
+                method = "pearson")
+
+# Create the scatterplot with correlation annotation
+ggplot(summarized_steps, aes(x = max_step, y = mean_edit_distance)) +
+  geom_point(alpha = 0.6, color = "steelblue", size = 3) +
+  geom_smooth(method = "lm", color = "red", se = FALSE, alpha = 0.2) +
+  annotate("text", x = max(summarized_steps$max_step), y = max(summarized_steps$mean_edit_distance),
+           label = sprintf("r = %.2f", cor_value),
+           hjust = 1) +
+  labs(
+    x = "Total Number of Steps",
+    y = "Mean Edit Distance"
+  ) +
+  ylim(0, max(summarized_steps$mean_edit_distance)) +
+  theme_minimal()
+
+ggsave("total_steps_vs_edit_distance_sorting_q2.png")
+```
+```{r}
+# Create a function to generate and save plots for each dataframe
+analyze_and_plot_dataframe <- function(df, df_name) {
+  # Process data
+  summarized_steps <- df %>%
+    filter(!is.na(id)) %>%
+    group_by(id) %>%
+    summarise(max_step = max(step, na.rm = TRUE),
+              mean_edit_distance = mean(edit_distance, na.rm = TRUE),
+              marks = max(marks, na.rm = TRUE)) %>% 
+    filter(marks > 0)
+  
+  # Calculate all correlations
+  cor_step_edit <- cor(summarized_steps$max_step, summarized_steps$mean_edit_distance, 
+                      method = "pearson", use = "complete.obs")
+  cor_edit_marks <- cor(summarized_steps$mean_edit_distance, summarized_steps$marks,
+                       method = "pearson", use = "complete.obs")
+  cor_step_marks <- cor(summarized_steps$max_step, summarized_steps$marks,
+                       method = "pearson", use = "complete.obs")
+  
+  # Create and save dotplot
+  p1 <- ggplot(summarized_steps, aes(x = max_step)) +
+    geom_dotplot(binwidth = 1, fill = "steelblue", alpha = 0.5,
+                 stackratio = 1.5,
+                 dotsize = 1) +
+    labs(
+      x = "Total Number of Steps",
+      y = "Count"
+    )
+  
+  ggsave(paste0("total_steps_", df_name, ".png"), p1)
+  
+  # Create and save scatterplot for steps vs edit distance
+  p2 <- ggplot(summarized_steps, aes(x = max_step, y = mean_edit_distance)) +
+    geom_point(alpha = 0.6, color = "steelblue", size = 3) +
+    geom_smooth(method = "lm", color = "red", se = FALSE, alpha = 0.2) +
+    annotate("text", x = max(summarized_steps$max_step), 
+             y = max(summarized_steps$mean_edit_distance),
+             label = sprintf("r = %.2f", cor_step_edit),
+             hjust = 1) +
+    labs(
+      x = "Total Number of Steps",
+      y = "Mean Edit Distance"
+    ) +
+    ylim(0, max(summarized_steps$mean_edit_distance)) +
+    theme_minimal()
+  
+  ggsave(paste0("total_steps_vs_edit_distance_", df_name, ".png"), p2)
+  
+  # Return all correlations
+  return(data.frame(
+    dataframe = df_name,
+    cor_step_edit = cor_step_edit,
+    cor_edit_marks = cor_edit_marks,
+    cor_step_marks = cor_step_marks
+  ))
+}
+
+# Apply function to all dataframes
+correlations <- lapply(df_names, function(name) {
+  df <- get(name)
+  analyze_and_plot_dataframe(df, gsub("df_data_", "", name))
+}) %>% bind_rows()
+
+# View correlations for all dataframes
+print(correlations)
+
+write_csv(correlations, "cor_step_edit.csv")
+```
+
