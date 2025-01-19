@@ -170,5 +170,5 @@ if __name__ == "__main__":
     torch.save(difficulty, f"{result_folder}/difficulty.pt")
 
     sampling_diagnostic = return_obj.diagnostics()
-    with open(f"{result_folder}/sampling_diagnostic.pkl", "w") as f:
+    with open(f"{result_folder}/sampling_diagnostic.pkl", "wb") as f:
         pickle.dump(sampling_diagnostic, f)
