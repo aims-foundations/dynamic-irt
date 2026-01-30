@@ -21,7 +21,7 @@ os.environ['GOOGLE_API_KEY'] = 'APIKEY'
 os.environ['OPENAI_API_KEY'] = 'APIKEY'
 os.environ["MISTRAL_API_KEY"] = 'APIKEY'
 
-OUTPUT_FOLDER = "https://huggingface.co/datasets/Kazchoko/codeinsights_llm_simulation/resolve/main/"
+OUTPUT_FOLDER = "https://huggingface.co/datasets/CodeInsightTeam/code_insights_csv/codeinsights_llm_simulation/resolve/main/"
 
 @dataclass
 class TestCase:

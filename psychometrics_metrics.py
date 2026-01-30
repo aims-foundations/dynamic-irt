@@ -92,7 +92,7 @@ LIST_LLMS = [
     "mistral"
 ]
 
-DATA_FOLDER = "https://huggingface.co/datasets/Kazchoko/codeinsights_llm_simulation/resolve/main/"
+DATA_FOLDER = "https://huggingface.co/datasets/CodeInsightTeam/code_insights_csv/codeinsights_llm_simulation/resolve/main/"
 
 model_map = {
     "claude3-5":   "claude-3-5",

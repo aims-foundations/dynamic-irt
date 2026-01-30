@@ -178,12 +178,13 @@ def generate_code(
     return rendered_codes
 
 
-def get_scenario_student_df(scenario, data_folder):
+def get_scenario_student_df(scenario_id, data_folder):
     scenario_student_df = pd.read_csv(
         os.path.join(
             data_folder,
             f"Scenario{scenario_id}_full_data.csv",
-        )
+        ),
+        dtype={"pass": str}
     )
     return scenario_student_df
 
@@ -367,12 +368,10 @@ def verify_results(scenario_result_df, scenario_student_df):
         .astype(str)
         .str.count(r"Unittest\s+\d+:")
     )
-    scenario_student_df["pass_str"] = (
-        scenario_student_df["pass"].astype(str).str.split(".", n=1).str[0]
-    )
+
     # 2) pad on the right with “0” to match num_unittest
     scenario_student_df["pass_padded"] = scenario_student_df.apply(
-        lambda r: r["pass_str"].ljust(int(r["num_unittest"]), "0"), axis=1
+        lambda r: r["pass"].ljust(int(r["num_unittest"]), "0"), axis=1
     )
     # 3) explode into one digit per row
     df_exploded = (
