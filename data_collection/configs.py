@@ -1,0 +1,58 @@
+LOGIN_USER = "010344"
+LOGIN_PASSWD = "010344"
+
+chromedriver_path = "/afs/cs.stanford.edu/u/nqduc/chromedriver-linux64/chromedriver"
+chrome_binary_path = "/afs/cs.stanford.edu/u/nqduc/chrome-linux64/chrome"
+
+DATA_LINKS = {
+    "dsa_hk231": {
+        "L01": "https://e-learning.hcmut.edu.vn/course/view.php?id=109032",
+        "L02": "https://e-learning.hcmut.edu.vn/course/view.php?id=112561",
+        "L03": "https://e-learning.hcmut.edu.vn/course/view.php?id=111383",
+        "L04": "https://e-learning.hcmut.edu.vn/course/view.php?id=107847",
+        "L05": "https://e-learning.hcmut.edu.vn/course/view.php?id=117019",
+        "L06": "https://e-learning.hcmut.edu.vn/course/view.php?id=107846",
+        "L07": "https://e-learning.hcmut.edu.vn/course/view.php?id=106656",
+        "L08": "https://e-learning.hcmut.edu.vn/course/view.php?id=110558",
+        "L09": "https://e-learning.hcmut.edu.vn/course/view.php?id=106649",
+        "L10": "https://e-learning.hcmut.edu.vn/course/view.php?id=110558",
+        "L11": "https://e-learning.hcmut.edu.vn/course/view.php?id=109026",
+        "L12": "https://e-learning.hcmut.edu.vn/course/view.php?id=109799",
+        "L13": "https://e-learning.hcmut.edu.vn/course/view.php?id=107841",
+        "L14": "https://e-learning.hcmut.edu.vn/course/view.php?id=109024",
+        "L15": "https://e-learning.hcmut.edu.vn/course/view.php?id=109796",
+        "CC01": "https://e-learning.hcmut.edu.vn/course/view.php?id=106526",
+        "CC02": "https://e-learning.hcmut.edu.vn/course/view.php?id=110479",
+        "CC03": "https://e-learning.hcmut.edu.vn/course/view.php?id=108915",
+        "CC04": "https://e-learning.hcmut.edu.vn/course/view.php?id=110476",
+        "CC05": "https://e-learning.hcmut.edu.vn/course/view.php?id=110476",
+        "CC06": "https://e-learning.hcmut.edu.vn/course/view.php?id=110476",
+        "CC07": "https://e-learning.hcmut.edu.vn/user/index.php?id=110479",
+        "CC08": "https://e-learning.hcmut.edu.vn/user/index.php?id=110479",
+        "CN01": "https://e-learning.hcmut.edu.vn/course/view.php?id=109196",
+        "CN02": "https://e-learning.hcmut.edu.vn/course/view.php?id=109195",
+        "DT01": "https://e-learning.hcmut.edu.vn/course/view.php?id=108885",
+    },
+    "dsa_hk221": {
+        "L01": "https://e-learning.hcmut.edu.vn/course/view.php?id=72806",
+        "L02": "https://e-learning.hcmut.edu.vn/course/view.php?id=72802",
+        "L03": "https://e-learning.hcmut.edu.vn/course/view.php?id=72804",
+        "L04": "https://e-learning.hcmut.edu.vn/course/view.php?id=72807",
+        "L05": "https://e-learning.hcmut.edu.vn/course/view.php?id=72808",
+        "L06": "https://e-learning.hcmut.edu.vn/course/view.php?id=72809",
+        "L07": "https://e-learning.hcmut.edu.vn/course/view.php?id=72803",
+        "L08": "https://e-learning.hcmut.edu.vn/course/view.php?id=72805",
+        "CC01": "https://e-learning.hcmut.edu.vn/course/view.php?id=67400",
+        "CC02": "https://e-learning.hcmut.edu.vn/course/view.php?id=67401",
+        "CC03": "https://e-learning.hcmut.edu.vn/course/view.php?id=67400",
+        "CC04": "https://e-learning.hcmut.edu.vn/course/view.php?id=67401",
+        "CC05": "https://e-learning.hcmut.edu.vn/course/view.php?id=67400",
+        "CN02": "https://e-learning.hcmut.edu.vn/course/view.php?id=75670",
+    },
+    "pf_hk232": {
+        "ALL": "https://lms.hcmut.edu.vn/course/view.php?id=31275",
+    },
+    "pf_hk222": {
+        "ALL": "https://e-learning.hcmut.edu.vn/course/view.php?id=94316",
+    },
+}

@@ -1,0 +1,17 @@
+.conda/
+data/
+plots/
+.ipynb_checkpoints/
+__pycache__/
+test.py
+wandb/
+.DS_Store
+myenv/
+dynamic_irt/gpirt/archived*
+llm_simulator/results/
+llm_simulator/saves/
+rssm/archived/
+rssm/eval_results/
+rssm/saves/
+results/
+test/*.png
