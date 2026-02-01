@@ -1,9 +1,26 @@
 # Models of Human Learning Dynamic: A Case Study in Learning to Program
 
-First, you need to install the required packages.
+## Getting Started
+
+Clone the repository with submodules:
+```bash
+git clone --recurse-submodules https://github.com/sangttruong/CodeInsights.git
+```
+
+If you already cloned without submodules:
+```bash
+git submodule update --init
+```
+
+Install the required packages:
 ```bash
 pip install -r requirements.txt
 ```
+
+## Project Structure
+
+- **codeinsights_llm_simulation/** - LLM evaluation framework for simulating student coding tasks (metrics, preprocessing)
+- **helm/** - HELM fork with custom CodeInsights scenarios and metrics for benchmarking
 
 To start data mining, run the below command:
 ```bash
