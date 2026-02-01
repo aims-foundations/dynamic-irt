@@ -1,3 +1,0 @@
-[submodule "helm"]
-	path = helm
-	url = https://github.com/Kazf28/helm.git
