@@ -2,14 +2,9 @@
 
 ## Getting Started
 
-Clone the repository with submodules:
+Clone the repository:
 ```bash
-git clone --recurse-submodules https://github.com/sangttruong/CodeInsights.git
-```
-
-If you already cloned without submodules:
-```bash
-git submodule update --init
+git clone https://github.com/sangttruong/CodeInsights.git
 ```
 
 Install the required packages:
@@ -20,7 +15,7 @@ pip install -r requirements.txt
 ## Project Structure
 
 - **codeinsights_llm_simulation/** - LLM evaluation framework for simulating student coding tasks (metrics, preprocessing)
-- **helm/** - HELM fork with custom CodeInsights scenarios and metrics for benchmarking
+- **helm_codeinsights/** - Custom HELM scenarios and metrics (see [helm_codeinsights/README.md](helm_codeinsights/README.md) for setup)
 
 To start data mining, run the below command:
 ```bash
