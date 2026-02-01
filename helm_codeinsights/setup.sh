@@ -8,12 +8,18 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="${1:-$SCRIPT_DIR/../helm}"
 
+# Pin to the commit that Kaz's CodeInsights integration was based on
+HELM_COMMIT="7448960adca66496457430a85a48ec3095994ed6"
+
 echo "==> Cloning HELM from stanford-crfm/helm..."
 if [ -d "$HELM_DIR" ]; then
     echo "    HELM directory already exists at $HELM_DIR, skipping clone"
 else
     git clone https://github.com/stanford-crfm/helm.git "$HELM_DIR"
 fi
+
+echo "==> Checking out pinned commit $HELM_COMMIT..."
+git -C "$HELM_DIR" checkout "$HELM_COMMIT"
 
 echo "==> Installing HELM in editable mode..."
 pip install -e "$HELM_DIR"
