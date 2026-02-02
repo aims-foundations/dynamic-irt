@@ -1,9 +1,18 @@
 # CodeInsights: Models of Human Learning Dynamics
 
-A research project focused on understanding and predicting learning dynamics over time, working with two main datasets:
+A research project focused on understanding and predicting learning dynamics over time.
 
-1. **CodeInsight** - University students learning to code (C++ programming courses)
-2. **Edmentum** - K-12 students learning math and reading
+## Motivation
+
+Traditional psychometrics models learning from binary response data (pass/fail). This project extends that paradigm: because we have **raw student code submissions**, we can pursue two complementary approaches:
+
+- **Dynamic IRT** (`dynamic_irt/`) - Classic psychometric models (Elo, GPIRT, RSSM) for learning curves from response data
+- **LLM Simulation** (`llm_simulator/`) - Fine-tuned LLMs that mimic student coding behavior from raw text
+
+## Datasets
+
+1. **CodeInsight** - University students learning C++ (includes both pass/fail and raw code)
+2. **Edmentum** - K-12 students learning math and reading (pass/fail only)
 
 ## Getting Started
 
