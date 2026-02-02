@@ -1,60 +1,112 @@
-# Models of Human Learning Dynamic: A Case Study in Learning to Program
+# CodeInsights: Models of Human Learning Dynamics
+
+A research project focused on understanding and predicting learning dynamics over time, working with two main datasets:
+
+1. **CodeInsight** - University students learning to code (C++ programming courses)
+2. **Edmentum** - K-12 students learning math and reading
 
 ## Getting Started
 
-Clone the repository:
 ```bash
 git clone https://github.com/sangttruong/CodeInsights.git
-```
-
-Install the required packages:
-```bash
 pip install -r requirements.txt
 ```
 
 ## Project Structure
 
-- **codeinsights_llm_simulation/** - LLM evaluation framework for simulating student coding tasks (metrics, preprocessing)
-- **helm_codeinsights/** - Custom HELM scenarios and metrics (see [helm_codeinsights/README.md](helm_codeinsights/README.md) for setup)
-
-To start data mining, run the below command:
-```bash
-python main_crawling.py [-h] [--course_name COURSE_NAME] [--class_name CLASS_NAME]
+```
+CodeInsights/
+├── data_collection/        # Web scraping + data preprocessing
+│   ├── collect_data.py     # Selenium-based scraping
+│   ├── convert_matrices.py # Data ETL for matrix format
+│   └── wnb_configs/        # Weights & Biases configs
+│
+├── dynamic_irt/            # All learning dynamics models
+│   ├── cirt/               # Continuous IRT models
+│   ├── gpirt/              # Gaussian Process IRT
+│   ├── elo/                # Elo-based rating (Edmentum + CodeInsight)
+│   ├── rssm/               # Recurrent State-Space Models
+│   ├── data_analysis/      # Student clustering, cheating detection
+│   └── simulated_learner/  # Synthetic student behavior
+│
+├── llm_simulator/          # All LLM-related functionality
+│   ├── configs/            # Training YAML configs
+│   ├── grading_engine/     # C++ code compilation/execution
+│   ├── llm_evaluation/     # vLLM-based code evaluation
+│   ├── evaluation/         # Multi-model LLM evaluation framework
+│   ├── helm_codeinsights/  # Custom HELM scenarios/metrics
+│   └── helm/               # Stanford CRFM HELM (submodule)
+│
+└── docs/                   # Hugo-based presentation slides
 ```
 
-For data visualization, please run the below command.
+## Data Collection
+
 ```bash
-python main_analyzing.py [-h] [--course_name COURSE_NAME] [--class_name CLASS_NAME]
+# Scrape student submissions
+python data_collection/collect_data.py --course_name DSA-HK231 --class_name L09
+
+# Convert to matrix format
+python data_collection/convert_matrices.py --course_name dsa_hk231
 ```
 
-## List of supported courses and classes
-- DSA-HK231
-    + L09
-    + DT01
+## Learning Dynamics Models
 
-## RSSM
-For fitting the Dynamic IRT model, run the following command:
+### Data Analysis
 ```bash
-python process_data.py
-python main_ess.py
+python dynamic_irt/data_analysis/main_analyzing.py --course_name DSA-HK231 --class_name L09
+```
+
+### RSSM (Recurrent State-Space Models)
+```bash
+python dynamic_irt/rssm/process_data.py
+python dynamic_irt/rssm/main_rssm.py
+```
+
+### Elo-based IRT (supports Edmentum + CodeInsight datasets)
+```bash
+cd CodeInsights
+python -m dynamic_irt.elo.main_elo
+python -m dynamic_irt.elo.difficulty_analysis
 ```
 
 ## LLM Simulator
-First, we train LLM using SFT.
-To supervised-finetune the language model, run the following command:
+
+### Training (SFT with LoRA)
 ```bash
-trl sft --config configs/sft_dsa_hk231.yaml \
-    --use_peft \
-    --lora_r 256 \
-    --lora_alpha 512 \
-    --lora_dropout 0.1
+trl sft --config llm_simulator/configs/sft_dsa_hk231.yaml \
+    --use_peft --lora_r 256 --lora_alpha 512 --lora_dropout 0.1
 ```
 
-After that, we merge the model and push it to HuggingFace Hub.
+### Merge and Push to HuggingFace
 ```bash
-python merge_push.py --config configs/sft_dsa_hk231.yaml \
-    --use_peft \
-    --lora_r 256 \
-    --lora_alpha 512 \
-    --lora_dropout 0.1
+python llm_simulator/merge_push.py --config configs/sft_dsa_hk231.yaml \
+    --use_peft --lora_r 256 --lora_alpha 512 --lora_dropout 0.1
 ```
+
+### LLM Evaluation
+```bash
+# Run evaluation pipeline
+python llm_simulator/evaluation/data_preprocessing.py
+python llm_simulator/evaluation/run_commercial_model.py
+python llm_simulator/evaluation/compute_metrics.py
+python llm_simulator/evaluation/psychometrics_metrics.py
+```
+
+## Documentation
+
+Run the presentation slides locally:
+```bash
+cd docs && hugo server
+```
+
+## Supported Courses
+
+- DSA-HK231 (L09, DT01)
+- DSA-HK222
+- DSA-HK232
+- PF courses
+
+## Data Sources
+
+- HuggingFace: `CodeInsightTeam/code_insights_csv`, `stair-lab/code_insights_csv`

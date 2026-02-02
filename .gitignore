@@ -7,11 +7,21 @@ test.py
 wandb/
 .DS_Store
 myenv/
+
+# Data files
+*.csv
+*.json
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Model/output directories
 dynamic_irt/gpirt/archived*
+dynamic_irt/rssm/archived/
+dynamic_irt/rssm/eval_results/
+dynamic_irt/rssm/saves/
 llm_simulator/results/
 llm_simulator/saves/
-rssm/archived/
-rssm/eval_results/
-rssm/saves/
+llm_simulator/helm/
 results/
-test/*.png

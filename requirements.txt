@@ -9,3 +9,8 @@ pandas
 scikit-learn
 datasets
 python-Levenshtein
+gdown
+seaborn
+scipy
+huggingface_hub
+vllm  # Optional: for LLM-based evaluation (requires GPU)

@@ -1,0 +1,33 @@
+# vLLM Model Deployments for CodeInsights
+# These models run locally via vLLM servers
+
+model_deployments:
+  # Meta LLaMA-3.1-8B-Instruct
+  - name: meta-llama/Llama-3.1-8B-Instruct
+    model_name: meta-llama/Llama-3.1-8B-Instruct
+    tokenizer_name: meta-llama/Llama-3.1-8B-Instruct
+    max_sequence_length: 8192
+    client_spec:
+      class_name: "helm.clients.vllm_client.VLLMClient"
+      args:
+        base_url: "http://localhost:8001/v1"
+
+  # Google Gemma-3-27B-IT (using 2 GPUs via tensor parallelism)
+  - name: google/gemma-3-27b-it
+    model_name: google/gemma-3-27b-it
+    tokenizer_name: google/gemma-3-27b-it
+    max_sequence_length: 8192
+    client_spec:
+      class_name: "helm.clients.vllm_client.VLLMClient"
+      args:
+        base_url: "http://localhost:8002/v1"
+
+  # Qwen-2.5-14B-Instruct
+  - name: Qwen/Qwen2.5-14B-Instruct
+    model_name: Qwen/Qwen2.5-14B-Instruct
+    tokenizer_name: Qwen/Qwen2.5-14B-Instruct
+    max_sequence_length: 32768
+    client_spec:
+      class_name: "helm.clients.vllm_client.VLLMClient"
+      args:
+        base_url: "http://localhost:8003/v1"

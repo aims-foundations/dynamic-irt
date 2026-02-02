@@ -1,0 +1,19 @@
+baseURL = 'https://ai.stanford.edu/~sttruong/dynamics/'
+languageCode = 'en-us'
+title = 'Reliable and Efficient Amortized Model-based Evaluation'
+theme = ["github.com/dzello/reveal-hugo"]
+
+[markup.goldmark.renderer]
+unsafe = true
+
+[outputFormats.Reveal]
+baseName = "index"
+mediaType = "text/html"
+isHTML = true
+
+[params.reveal_hugo]
+custom_theme = "css/serif.css"
+enableSourceMap = true
+margin = 0.1
+history = true
+slide_number = true

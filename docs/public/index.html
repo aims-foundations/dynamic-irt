@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+  <head>
+	<meta name="generator" content="Hugo 0.130.0">
+    <meta charset="utf-8">
+<title>Dynamics of Learning</title>
+
+
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><link rel="stylesheet" href="/~sttruong/dynamics/reveal-js/dist/reset.css">
+<link rel="stylesheet" href="/~sttruong/dynamics/reveal-js/dist/reveal.css"><link rel="stylesheet" href="/~sttruong/dynamics/css/serif.css" id="theme"><link rel="stylesheet" href="/~sttruong/dynamics/highlight-js/default.min.css">
+  </head>
+  <body>
+    
+    <style>
+      #logo {
+        position: absolute;
+        top: 1%;
+        left: 1%;
+        width: 15%;
+      }
+    </style>
+    <img id="logo" src="images/sail-logo.jpg" alt="">
+    
+    <div class="reveal">
+      <div class="slides">
+  
+
+    
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h2 id="dynamics-of-learning">Dynamics of Learning</h2>
+<div style="text-align:center;">
+Sang Truong, Duc Nguyen, Tho Quan, Sanmi Koyejo, Nick Habber
+</div>
+<div style="text-align:center; font-style:italic;">
+Work in Progress
+</div>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="1-introduction">1. Introduction</h3>
+<p><strong>Problem:</strong> How can we model the student&rsquo;s dynamics of learning, especially in coding when the student&rsquo;s ability changes over time?</p>
+<p><strong>Potential contributions:</strong></p>
+<ul>
+<li>Provide an open-source dataset of coding questions and student answers for the community.</li>
+<li>Propose an approach for modeling students&rsquo; abilities and test case difficulties based on Dynamic Item Response Theory (IRT).</li>
+<li>Propose a method for simulating student behaviors based on large language models and latent dynamical models.</li>
+</ul>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="2-data">2. Data</h3>
+<ul>
+<li>2 courses: Programming Fundamentals (PF) and Data Structures and Algorithms (DSA)</li>
+<li>2 quaters for each course (PF222, PF232, DSA221, DSA231)</li>
+<li>3286 students in total</li>
+</ul>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="2-data-1">2. Data</h3>
+<h4 id="coding-data---questions">Coding Data - Questions</h4>
+<img src="figures/question_table.png" style="width: 100%;">
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="2-data-2">2. Data</h3>
+<h4 id="coding-data---student-answers">Coding Data - Student answers</h4>
+<img src="figures/response_table.png" style="width: 100%;">
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-naive-baselines">3. Naive Baselines</h3>
+<p>(Not Yet Decided)</p>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt">3. Dynamic IRT</h3>
+<p><strong>Students:</strong>
+
+
+<span class='fragment ' ><ul>
+<li>There are $N$ students, each is indexed by $n \in [N]$.</li>
+<li>Each student has $T_n = \{ t_{n1}, \cdots, t_{nT} \}$ submission times.</li>
+<li>Each submission time $t$ is modeled with a $\theta_t$, representing the student ability at that time.</li>
+</ul>
+</span>
+
+</p>
+<p><strong>Questions:</strong>
+
+
+<span class='fragment ' ><ul>
+<li>There are $Q$ questions, each question has 5 to 15 testcases.</li>
+<li>The set of all testcases is $M$. Each element is indexed by $m \in [M]$</li>
+<li>Each testcase is modeled with a $z_m$ indicating the testcase difficulty.</li>
+</ul>
+</span>
+
+</p>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-1">3. Dynamic IRT</h3>
+<ul>
+<li>At each submission time $t$, the student submits an answer to a question $q \in Q$.</li>
+<li>She will receive the scores of all testcases $m \in M_q$ of that question: $Y_{nt} = \{ y_{ntm} \}_{i=1}^{|M_q|}$.</li>
+</ul>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-2">3. Dynamic IRT</h3>
+
+
+<span class='fragment ' >For the duration of the course, the score of a student $n$ at time $t$ on testcase $m$ is modeled as:</span>
+
+
+
+
+<span class='fragment ' ><p>$$p(y|\theta_t, z_m) = \sigma(\theta_t + z_m)$$</p>
+<p>where $\sigma$ is the sigmoid function.</p>
+</span>
+
+
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-3">3. Dynamic IRT</h3>
+<p>
+
+<span class='fragment ' >We assume that the student ability $\theta_{1:T}$ of a student is drawn from a Gaussian Process</span>
+
+
+
+
+<span class='fragment ' >and the covariance matrix is given by the kernel function $K$ with hyperparameters $\psi_K$.</span>
+
+</p>
+
+
+<span class='fragment ' ><p>$$\theta_{1:T} \sim \mathcal{G}\mathcal{P}(\mathbf{0}, \Sigma; \psi_K)$$</p>
+</span>
+
+
+
+
+<span class='fragment ' ><p>$$\Sigma = K(T, T; \psi_K)$$</p>
+</span>
+
+
+<img src="figures/GP.gif">
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-4">3. Dynamic IRT</h3>
+
+
+<span class='fragment ' >We assume each testcase is independent and the difficulty $z_m$ of a testcase is drawn from a Normal distribution.</span>
+
+
+
+
+<span class='fragment ' ><p>$$z_m \sim \mathcal{N}(0, 1)$$</p>
+</span>
+
+
+<!-- 
+
+<span class='fragment ' ><p>&ndash;&gt;</p>
+<!-- *Open question: Shoule we use a GP for the testcase difficulty as well?*</span>
+
+ -->
+<!-- ---
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+### 3. Dynamic IRT
+
+
+<span class='fragment ' ><p>With a pre-defined $K$ and $\psi_K$, we can compute the posterior distribution of the student ability $\theta_t$ given the observed data $Y_{nt}$.</p>
+</span>
+
+
+
+
+
+<span class='fragment ' ><p>Setting: $K$ is the RBF kernel with $\psi_K = \{length\_scale = 1\}$; Seeds: 42, 45;</p>
+</span>
+
+
+
+**Student 0:**
+
+
+
+<span class='fragment ' ><img src="figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale1.0/student_0_theta_dist.png" style="width: 40%;">
+<img src="figures/dsa_hk231_seed45_npoints500_kernelRBF_lengthscale1.0/student_0_theta_dist.png" style="width: 40%;">
+</span>
+
+
+
+
+---
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+### 3. Dynamic IRT
+With a pre-defined $K$ and $\psi_K$, we can compute the posterior distribution of the student ability $\theta_t$ given the observed data $Y_{nt}$.
+
+Setting: $K$ is the RBF kernel with $\psi_K = \\{length\\_scale = 1\\}$; Seeds: 42, 45;
+
+**Student 1:**
+
+<img src="figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale1.0/student_1_theta_dist.png" style="width: 40%;">
+<img src="figures/dsa_hk231_seed45_npoints500_kernelRBF_lengthscale1.0/student_1_theta_dist.png" style="width: 40%;">
+
+---
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+### 3. Dynamic IRT
+With a pre-defined $K$ and $\psi_K$, we can compute the posterior distribution of the student ability $\theta_t$ given the observed data $Y_{nt}$.
+
+Setting: $K$ is the RBF kernel with $\psi_K = \\{length\\_scale = 1\\}$; Seeds: 42, 45;
+
+**Student 2:**
+
+<img src="figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale1.0/student_2_theta_dist.png" style="width: 40%;">
+<img src="figures/dsa_hk231_seed45_npoints500_kernelRBF_lengthscale1.0/student_2_theta_dist.png" style="width: 40%;">
+
+---
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+### 3. Dynamic IRT
+With a pre-defined $K$ and $\psi_K$, we can compute the posterior distribution of the student ability $\theta_t$ given the observed data $Y_{nt}$.
+
+Setting: $K$ is the RBF kernel with $\psi_K = \\{length\\_scale = 1\\}$; Seeds: 42, 45;
+
+**Student 3:**
+
+<img src="figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale1.0/student_3_theta_dist.png" style="width: 40%;">
+<img src="figures/dsa_hk231_seed45_npoints500_kernelRBF_lengthscale1.0/student_3_theta_dist.png" style="width: 40%;">
+
+---
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+### 3. Dynamic IRT
+With a pre-defined $K$ and $\psi_K$, we can compute the posterior distribution of the student ability $\theta_t$ given the observed data $Y_{nt}$.
+
+Setting: $K$ is the RBF kernel with $\psi_K = \\{length\\_scale = 1\\}$; Seeds: 42, 45;
+
+**Student 4:**
+
+<img src="figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale1.0/student_4_theta_dist.png" style="width: 40%;">
+<img src="figures/dsa_hk231_seed45_npoints500_kernelRBF_lengthscale1.0/student_4_theta_dist.png" style="width: 40%;"> -->
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-5">3. Dynamic IRT</h3>
+<h4 id="hamiltonian-monte-carlo-algorithm">Hamiltonian Monte Carlo algorithm</h4>
+<p><em>Conceptual pipeline:</em></p>
+<ul>
+<li>Sample all the student abilities $\theta_{n, 1:T} \sim \mathcal{G}\mathcal{P}(\mathbf{0}, \Sigma_n; \psi_K)$</li>
+<li>Sample all the testcase difficulties $z_m \sim \mathcal{N}(0, 1)$</li>
+<li>Compute the probability of each student&rsquo;s answer $p(y_{ntm}|\theta_{nt}, z_m)$</li>
+<li>Hamiltonian Monte Carlo algorithm will decide to accept or reject the new sample based on the Hamiltonian dynamics.</li>
+</ul>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-6">3. Dynamic IRT</h3>
+<h4 id="compute-the-hamiltonian">Compute the Hamiltonian</h4>
+<p>The Hamiltonian $H(\theta, r)$ combines:
+$H(\theta, r) = U(\theta) + K(r)$</p>
+<ul>
+<li><strong>Potential Energy</strong>: $U(\theta) = -\log p(\theta)$</li>
+<li><strong>Kinetic Energy</strong>: $K(r) = \frac{1}{2} r^\top M^{-1} r$</li>
+</ul>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-7">3. Dynamic IRT</h3>
+<h4 id="metropolis-acceptance-step">Metropolis Acceptance Step</h4>
+<ul>
+<li>Compute the new Hamiltonian $H(\theta^*, r^*)$.</li>
+<li>Accept the new state $(\theta^*, r^*)$ with probability:</li>
+</ul>
+<p>$$\alpha = \min\left(1, \exp(H(\theta_t, r_t) - H(\theta^*, r^*))\right)$$</p>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-8">3. Dynamic IRT</h3>
+<p>Result (average Accuracy) for different RBF kernel with $\psi_K = \{length\_scale = 0.1, 0.5, 1\}$;</p>
+<img src="figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale0.1/all_students_accuracy_hist.png" style="width: 32%;">
+<img src="figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale0.5/all_students_accuracy_hist.png" style="width: 32%;">
+<img src="figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale1.0/all_students_accuracy_hist.png" style="width: 32%;">
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-9">3. Dynamic IRT</h3>
+<p>Result (average Accuracy) for different Matern kernel with $\psi_K = \{\nu = 0.5, 1.5, 2.5\}$;</p>
+<img src="figures/dsa_hk231_seed42_npoints500_kernelMatern_nu0.5/all_students_accuracy_hist.png" style="width: 32%;">
+<img src="figures/dsa_hk231_seed42_npoints500_kernelMatern_nu1.5/all_students_accuracy_hist.png" style="width: 32%;">
+<img src="figures/dsa_hk231_seed42_npoints500_kernelMatern_nu2.5/all_students_accuracy_hist.png" style="width: 32%;">
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-10">3. Dynamic IRT</h3>
+<p>$D_{KL}$ between the posterior distribution of the question difficulty $z_m$ in different runs.
+Setting: $K$ is the RBF kernel with $\psi_K = \{length\_scale = 1\}$; Seeds: 42, 45;</p>
+<img src="figures/kl_divergence_histogram.png" style="width: 50%;">
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="3-dynamic-irt-11">3. Dynamic IRT</h3>
+<p>Distribution of $z_m$ for different testcase $m$; The higher $z$ means the testcase is easier</p>
+<img src="figures/z_histogram_index_185.png" style="width: 40%;">
+<img src="figures/z_histogram_index_350.png" style="width: 40%;">
+<img src="figures/z_histogram_index_496.png" style="width: 40%;">
+<img src="figures/z_histogram_index_882.png" style="width: 40%;">
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="4-reccurent-state-space-model">4. Reccurent State Space Model</h3>
+<p>Recurrent model: $h_t = f_\phi(h_{t-1}, z_{t-1}, q_{t})$</p>
+<p>Representation model: $z_t             \sim     q_{\phi}(z_t | e_t)$</p>
+<p>Transition predictor: $\hat{z}_t       \sim  p_{\phi}(\hat{z}_t | h_t)$</p>
+<p>Embedding predictor: $\hat{e}_t       \sim  p_{\phi}(\hat{e}_t | z_t)$</p>
+<p>Score predictor: $\hat{r}_t       \sim  p_{\phi}(\hat{r}_t | q_t, w_{q_t}, e_t)$</p>
+<p>Text decoder: $\hat{x}_t       \sim  p_{\psi}(\hat{x}_t | \hat{e}_t)$</p>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="4-reccurent-state-space-model-1">4. Reccurent State Space Model</h3>
+<img src="figures/latent_rssm.png" >
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="4-reccurent-state-space-model-without-latent">4. Reccurent State Space Model without Latent</h3>
+<p>Recurrent model: $h_t = f_\phi(h_{t-1}, e_{t-1}, q_{t})$</p>
+<p>Embedding predictor: $\hat{e}_t       \sim  p_{\phi}(\hat{e}_t | h_t)$</p>
+<p>Score predictor: $\hat{r}_t       \sim  p_{\phi}(\hat{r}_t | q_t, w_{q_t}, e_t)$</p>
+<p>Text decoder: $\hat{x}_t       \sim  p_{\psi}(\hat{x}_t | \hat{e}_t)$</p>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="4-reccurent-state-space-model-without-latent-1">4. Reccurent State Space Model without Latent</h3>
+<img src="figures/rssm_wo_latent.png" >
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="5-language-model-simulation">5. Language Model Simulation</h3>
+</section>
+
+<section data-noprocess data-shortcode-slide
+      data-auto-animate="">
+  
+<h3 id="6-conclusion">6. Conclusion</h3>
+</section>
+
+  
+
+
+</div>
+      
+
+    </div>
+<script type="text/javascript" src=/~sttruong/dynamics/reveal-hugo/object-assign.js></script>
+
+
+<script src="/~sttruong/dynamics/reveal-js/dist/reveal.js"></script>
+
+
+  <script type="text/javascript" src="/~sttruong/dynamics/reveal-js/plugin/markdown/markdown.js"></script>
+  
+  <script type="text/javascript" src="/~sttruong/dynamics/reveal-js/plugin/highlight/highlight.js"></script>
+  
+  <script type="text/javascript" src="/~sttruong/dynamics/reveal-js/plugin/zoom/zoom.js"></script>
+  
+  <script type="text/javascript" src="/~sttruong/dynamics/reveal-js/plugin/notes/notes.js"></script>
+  
+<script type="text/javascript">
+  
+  
+  function camelize(map) {
+    if (map) {
+      Object.keys(map).forEach(function(k) {
+        newK = k.replace(/(\_\w)/g, function(m) { return m[1].toUpperCase() });
+        if (newK != k) {
+          map[newK] = map[k];
+          delete map[k];
+        }
+      });
+    }
+    return map;
+  }
+
+  var revealHugoDefaults = { center: true, controls: true, history: true, progress: true, transition: "slide" };
+  var revealHugoSiteParams = {"custom_theme":"css/serif.css","enablesourcemap":true,"history":true,"margin":0.1,"slide_number":true};
+  var revealHugoPageParams = {};
+
+  var revealHugoPlugins = {
+    
+    plugins: [RevealMarkdown,RevealHighlight,RevealZoom,RevealNotes]
+  };
+
+  
+  var options = Object.assign({},
+    camelize(revealHugoDefaults),
+    camelize(revealHugoSiteParams),
+    camelize(revealHugoPageParams),
+    camelize(revealHugoPlugins));
+
+  Reveal.initialize(options);
+</script>
+
+
+
+
+
+  
+  
+    
+  
+
+  
+  
+
+  
+  
+
+
+
+
+
+<script>
+  MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']]
+    },
+    svg: {
+      fontCache: 'global'
+    }
+  };
+</script>
+  
+
+<script type="text/javascript" id="MathJax-script" async src="/~sttruong/dynamics/tex-svg_10887261161190234492.js"></script>
+
+    
+    
+  </body>
+</html>
