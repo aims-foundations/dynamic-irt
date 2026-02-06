@@ -3,8 +3,13 @@ import json
 import pickle
 import random
 import re
+import sys
 from argparse import ArgumentParser
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 

@@ -1,0 +1,276 @@
+---
+title: "Dynamics of Learning"
+date: "2024-11-10"
+format:
+  revealjs:
+    theme: serif
+    slide-number: true
+    history: true
+    margin: 0.1
+    auto-animate: true
+    logo: figures/images/sail-logo.jpg
+---
+
+## Dynamics of Learning {auto-animate=true}
+
+::: {style="text-align:center; font-style:italic;"}
+Work in Progress
+:::
+
+---
+
+### 1. Introduction {auto-animate=true}
+
+**Problem:** How can we model the student's dynamics of learning, especially in coding when the student's ability changes over time?
+
+**Potential contributions:**
+
+- Provide an open-source dataset of coding questions and student answers for the community.
+- Propose an approach for modeling students' abilities and test case difficulties based on Dynamic Item Response Theory (IRT).
+- Propose a method for simulating student behaviors based on large language models and latent dynamical models.
+
+---
+
+### 2. Data {auto-animate=true}
+
+- 2 courses: Programming Fundamentals (PF) and Data Structures and Algorithms (DSA)
+- 2 quarters for each course (PF222, PF232, DSA221, DSA231)
+- 3286 students in total
+
+---
+
+### 2. Data {auto-animate=true}
+
+#### Coding Data - Questions
+
+![](figures/question_table.png){width="100%"}
+
+---
+
+### 2. Data {auto-animate=true}
+
+#### Coding Data - Student answers
+
+![](figures/response_table.png){width="100%"}
+
+---
+
+### 3. Naive Baselines {auto-animate=true}
+
+(Not Yet Decided)
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+**Students:**
+
+::: {.fragment}
+-  There are $N$ students, each is indexed by $n \in [N]$.
+-  Each student has $T_n = \{ t_{n1}, \cdots, t_{nT} \}$ submission times.
+-  Each submission time $t$ is modeled with a $\theta_t$, representing the student ability at that time.
+:::
+
+**Questions:**
+
+::: {.fragment}
+-   There are $Q$ questions, each question has 5 to 15 testcases.
+-   The set of all testcases is $M$. Each element is indexed by $m \in [M]$
+-   Each testcase is modeled with a $z_m$ indicating the testcase difficulty.
+:::
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+-   At each submission time $t$, the student submits an answer to a question $q \in Q$.
+-   She will receive the scores of all testcases $m \in M_q$ of that question: $Y_{nt} = \{ y_{ntm} \}_{i=1}^{|M_q|}$.
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+::: {.fragment}
+For the duration of the course, the score of a student $n$ at time $t$ on testcase $m$ is modeled as:
+:::
+
+::: {.fragment}
+$$p(y|\theta_t, z_m) = \sigma(\theta_t + z_m)$$
+
+where $\sigma$ is the sigmoid function.
+:::
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+::: {.fragment}
+We assume that the student ability $\theta_{1:T}$ of a student is drawn from a Gaussian Process
+:::
+
+::: {.fragment}
+and the covariance matrix is given by the kernel function $K$ with hyperparameters $\psi_K$.
+:::
+
+::: {.fragment}
+$$\theta_{1:T} \sim \mathcal{GP}(\mathbf{0}, \Sigma; \psi_K)$$
+:::
+
+::: {.fragment}
+$$\Sigma = K(T, T; \psi_K)$$
+:::
+
+![](figures/GP.gif)
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+::: {.fragment}
+We assume each testcase is independent and the difficulty $z_m$ of a testcase is drawn from a Normal distribution.
+:::
+
+::: {.fragment}
+$$z_m \sim \mathcal{N}(0, 1)$$
+:::
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+#### Hamiltonian Monte Carlo algorithm
+
+*Conceptual pipeline:*
+
+- Sample all the student abilities $\theta_{n, 1:T} \sim \mathcal{GP}(\mathbf{0}, \Sigma_n; \psi_K)$
+- Sample all the testcase difficulties $z_m \sim \mathcal{N}(0, 1)$
+- Compute the probability of each student's answer $p(y_{ntm}|\theta_{nt}, z_m)$
+- Hamiltonian Monte Carlo algorithm will decide to accept or reject the new sample based on the Hamiltonian dynamics.
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+#### Compute the Hamiltonian
+
+The Hamiltonian $H(\theta, r)$ combines:
+
+$$H(\theta, r) = U(\theta) + K(r)$$
+
+-   **Potential Energy**: $U(\theta) = -\log p(\theta)$
+-   **Kinetic Energy**: $K(r) = \frac{1}{2} r^\top M^{-1} r$
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+#### Metropolis Acceptance Step
+
+- Compute the new Hamiltonian $H(\theta^*, r^*)$.
+- Accept the new state $(\theta^*, r^*)$ with probability:
+
+$$\alpha = \min\left(1, \exp(H(\theta_t, r_t) - H(\theta^*, r^*))\right)$$
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+Result (average Accuracy) for different RBF kernel with $\psi_K = \{length\_scale = 0.1, 0.5, 1\}$;
+
+::: {layout-ncol=3}
+![](figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale0.1/all_students_accuracy_hist.png)
+
+![](figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale0.5/all_students_accuracy_hist.png)
+
+![](figures/dsa_hk231_seed42_npoints500_kernelRBF_lengthscale1.0/all_students_accuracy_hist.png)
+:::
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+Result (average Accuracy) for different Matern kernel with $\psi_K = \{\nu = 0.5, 1.5, 2.5\}$;
+
+::: {layout-ncol=3}
+![](figures/dsa_hk231_seed42_npoints500_kernelMatern_nu0.5/all_students_accuracy_hist.png)
+
+![](figures/dsa_hk231_seed42_npoints500_kernelMatern_nu1.5/all_students_accuracy_hist.png)
+
+![](figures/dsa_hk231_seed42_npoints500_kernelMatern_nu2.5/all_students_accuracy_hist.png)
+:::
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+$D_{KL}$ between the posterior distribution of the question difficulty $z_m$ in different runs.
+
+Setting: $K$ is the RBF kernel with $\psi_K = \{length\_scale = 1\}$; Seeds: 42, 45;
+
+![](figures/kl_divergence_histogram.png){width="50%"}
+
+---
+
+### 3. Dynamic IRT {auto-animate=true}
+
+Distribution of $z_m$ for different testcase $m$; The higher $z$ means the testcase is easier
+
+::: {layout-ncol=2}
+![](figures/z_histogram_index_185.png)
+
+![](figures/z_histogram_index_350.png)
+
+![](figures/z_histogram_index_496.png)
+
+![](figures/z_histogram_index_882.png)
+:::
+
+---
+
+### 4. Recurrent State Space Model {auto-animate=true}
+
+Recurrent model: $h_t = f_\phi(h_{t-1}, z_{t-1}, q_{t})$
+
+Representation model: $z_t \sim q_{\phi}(z_t | e_t)$
+
+Transition predictor: $\hat{z}_t \sim p_{\phi}(\hat{z}_t | h_t)$
+
+Embedding predictor: $\hat{e}_t \sim p_{\phi}(\hat{e}_t | z_t)$
+
+Score predictor: $\hat{r}_t \sim p_{\phi}(\hat{r}_t | q_t, w_{q_t}, e_t)$
+
+Text decoder: $\hat{x}_t \sim p_{\psi}(\hat{x}_t | \hat{e}_t)$
+
+---
+
+### 4. Recurrent State Space Model {auto-animate=true}
+
+![](figures/latent_rssm.png)
+
+---
+
+### 4. Recurrent State Space Model without Latent {auto-animate=true}
+
+Recurrent model: $h_t = f_\phi(h_{t-1}, e_{t-1}, q_{t})$
+
+Embedding predictor: $\hat{e}_t \sim p_{\phi}(\hat{e}_t | h_t)$
+
+Score predictor: $\hat{r}_t \sim p_{\phi}(\hat{r}_t | q_t, w_{q_t}, e_t)$
+
+Text decoder: $\hat{x}_t \sim p_{\psi}(\hat{x}_t | \hat{e}_t)$
+
+---
+
+### 4. Recurrent State Space Model without Latent {auto-animate=true}
+
+![](figures/rssm_wo_latent.png)
+
+---
+
+### 5. Language Model Simulation {auto-animate=true}
+
+
+---
+
+### 6. Conclusion {auto-animate=true}
+
