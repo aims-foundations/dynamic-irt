@@ -8,7 +8,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import wandb
 from huggingface_hub import snapshot_download
-from utils import find_global_max
+
+try:
+    from .utils import find_global_max  # When used as a module
+except ImportError:
+    from utils import find_global_max  # When run as a script
 
 
 def normalize_name(name):

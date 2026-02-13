@@ -30,12 +30,13 @@ CodeInsights/
 │   ├── convert_matrices.py # Data ETL for matrix format
 │   └── wnb_configs/        # Weights & Biases configs
 │
+├── data_analysis/          # Student clustering, cheating detection, pace analysis
+│
 ├── dynamic_irt/            # All learning dynamics models
 │   ├── cirt/               # Continuous IRT models
 │   ├── gpirt/              # Gaussian Process IRT
 │   ├── elo/                # Elo-based rating (Edmentum + CodeInsight)
 │   ├── rssm/               # Recurrent State-Space Models
-│   ├── data_analysis/      # Student clustering, cheating detection
 │   └── simulated_learner/  # Synthetic student behavior
 │
 ├── llm_simulator/          # All LLM-related functionality
@@ -63,7 +64,7 @@ python data_collection/convert_matrices.py --course_name dsa_hk231
 
 ### Data Analysis
 ```bash
-python dynamic_irt/data_analysis/main_analyzing.py --course_name DSA-HK231 --class_name L09
+python data_analysis/main_analyzing.py --course_name DSA-HK231 --class_name L09
 ```
 
 ### RSSM (Recurrent State-Space Models)

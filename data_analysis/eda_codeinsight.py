@@ -5,7 +5,7 @@ This script provides comprehensive visualizations of the CodeInsight dataset
 to understand student learning patterns, response distributions, and data characteristics.
 
 Usage:
-    python -m dynamic_irt.data_analysis.eda_codeinsight
+    python -m data_analysis.eda_codeinsight
 """
 
 import os
