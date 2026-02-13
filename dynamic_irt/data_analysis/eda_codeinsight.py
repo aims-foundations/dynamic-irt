@@ -14,12 +14,54 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from huggingface_hub import login, snapshot_download
+from tueplots import bundles
 
-# Set style for all plots
-plt.style.use('seaborn-v0_8-whitegrid')
+# Set style for all plots with LaTeX fonts and tueplots
+plt.rcParams.update(bundles.icml2022())
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
+    "axes.labelsize": 10,
+    "font.size": 10,
+    "legend.fontsize": 8,
+    "xtick.labelsize": 8,
+    "ytick.labelsize": 8,
+})
 sns.set_palette("husl")
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "eda_outputs")
+
+
+def beautify_course_name(course_name):
+    """Convert course codes to readable names.
+
+    Examples:
+        pf_hk232 -> Programming Fundamentals (Spring 2023)
+        dsa_hk231 -> Data Structures \& Algorithms (Fall 2023)
+    """
+    if pd.isna(course_name):
+        return course_name
+
+    course_name = str(course_name).lower()
+
+    # Parse course type
+    if course_name.startswith("pf"):
+        course_type = "Programming Fundamentals"
+    elif course_name.startswith("dsa"):
+        course_type = "Data Structures \\& Algorithms"
+    else:
+        course_type = course_name.split("_")[0].upper()
+
+    # Parse semester (HK format: HKXYZ where X=year, Y=semester, Z=unused)
+    # HK231 = Fall 2023, HK232 = Spring 2023, HK221 = Fall 2021, HK222 = Spring 2022
+    if "_hk" in course_name:
+        semester_code = course_name.split("_hk")[1][:3]
+        year = "20" + semester_code[0:2]
+        semester = "Fall" if semester_code[2] == "1" else "Spring"
+        return f"{course_type} ({semester} {year})"
+
+    return course_type
 
 
 def load_codeinsight_data():
@@ -48,6 +90,9 @@ def load_codeinsight_data():
     # Merge course names into main data
     main_data = main_data.merge(courses, on="course_id", how="left")
 
+    # Beautify course names for display
+    main_data["course_name_display"] = main_data["course_name"].apply(beautify_course_name)
+
     return main_data, questions
 
 
@@ -75,7 +120,7 @@ def print_dataset_summary(df, questions):
 
     # Course breakdown
     print(f"\nCourses:")
-    course_counts = df["course_name"].value_counts()
+    course_counts = df["course_name_display"].value_counts()
     for course, count in course_counts.items():
         print(f"  - {course}: {count:,} submissions")
 
@@ -132,7 +177,7 @@ def plot_pass_rate_distribution(df, save=True):
     plt.tight_layout()
     if save:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        plt.savefig(f"{OUTPUT_DIR}/pass_rate_distribution.png", dpi=150, bbox_inches="tight")
+        plt.savefig(f"{OUTPUT_DIR}/pass_rate_distribution.png", dpi=300, bbox_inches="tight")
         print(f"Saved: {OUTPUT_DIR}/pass_rate_distribution.png")
     plt.show()
 
@@ -192,7 +237,7 @@ def plot_attempts_distribution(df, save=True):
     plt.tight_layout()
     if save:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        plt.savefig(f"{OUTPUT_DIR}/attempts_distribution.png", dpi=150, bbox_inches="tight")
+        plt.savefig(f"{OUTPUT_DIR}/attempts_distribution.png", dpi=300, bbox_inches="tight")
         print(f"Saved: {OUTPUT_DIR}/attempts_distribution.png")
     plt.show()
 
@@ -255,7 +300,7 @@ def plot_temporal_patterns(df, save=True):
     plt.tight_layout()
     if save:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        plt.savefig(f"{OUTPUT_DIR}/temporal_patterns.png", dpi=150, bbox_inches="tight")
+        plt.savefig(f"{OUTPUT_DIR}/temporal_patterns.png", dpi=300, bbox_inches="tight")
         print(f"Saved: {OUTPUT_DIR}/temporal_patterns.png")
     plt.show()
 
@@ -321,7 +366,7 @@ def plot_question_difficulty(df, save=True):
     plt.tight_layout()
     if save:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        plt.savefig(f"{OUTPUT_DIR}/question_difficulty.png", dpi=150, bbox_inches="tight")
+        plt.savefig(f"{OUTPUT_DIR}/question_difficulty.png", dpi=300, bbox_inches="tight")
         print(f"Saved: {OUTPUT_DIR}/question_difficulty.png")
     plt.show()
 
@@ -402,9 +447,124 @@ def plot_learning_curves(df, save=True):
     plt.tight_layout()
     if save:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        plt.savefig(f"{OUTPUT_DIR}/learning_curves.png", dpi=150, bbox_inches="tight")
+        plt.savefig(f"{OUTPUT_DIR}/learning_curves.png", dpi=300, bbox_inches="tight")
         print(f"Saved: {OUTPUT_DIR}/learning_curves.png")
     plt.show()
+
+
+def plot_code_length_distribution(df, save=True):
+    """Plot distribution of code lengths (tokens) across submissions and students."""
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    # Filter to submissions with code
+    code_df = df[df["response_type"].isin(["Submit", "Prechecked"])].copy()
+    code_df = code_df.dropna(subset=["response"])
+
+    # Count tokens (simple whitespace split)
+    def count_tokens(code):
+        try:
+            return len(str(code).split())
+        except:
+            return 0
+
+    code_df["code_length"] = code_df["response"].apply(count_tokens)
+    code_df = code_df[code_df["code_length"] > 0]
+
+    # Top-left: Distribution of code length per submission
+    # Filter outliers for better visualization (remove top 1%)
+    q99 = code_df["code_length"].quantile(0.99)
+    code_lengths_filtered = code_df[code_df["code_length"] <= q99]["code_length"]
+
+    axes[0, 0].hist(code_lengths_filtered, bins=50, edgecolor="black", alpha=0.7)
+    axes[0, 0].axvline(code_df["code_length"].mean(), color="red", linestyle="--",
+                       label=f"Mean: {code_df['code_length'].mean():.0f}")
+    axes[0, 0].axvline(code_df["code_length"].median(), color="orange", linestyle="--",
+                       label=f"Median: {code_df['code_length'].median():.0f}")
+    axes[0, 0].set_xlabel("Code Length (tokens)")
+    axes[0, 0].set_ylabel("Number of Submissions")
+    axes[0, 0].set_title("Code Length per Submission (99th percentile)")
+    axes[0, 0].legend()
+
+    # Top-right: Total code volume per student
+    student_code_volume = code_df.groupby("student_id").agg(
+        total_tokens=("code_length", "sum"),
+        n_submissions=("code_length", "count")
+    ).reset_index()
+
+    # Filter outliers
+    q99_student = student_code_volume["total_tokens"].quantile(0.99)
+    student_filtered = student_code_volume[student_code_volume["total_tokens"] <= q99_student]
+
+    axes[0, 1].hist(student_filtered["total_tokens"], bins=50, edgecolor="black", alpha=0.7)
+    axes[0, 1].axvline(student_code_volume["total_tokens"].mean(), color="red", linestyle="--",
+                       label=f"Mean: {student_code_volume['total_tokens'].mean():.0f}")
+    axes[0, 1].set_xlabel("Total Code Volume (tokens)")
+    axes[0, 1].set_ylabel("Number of Students")
+    axes[0, 1].set_title("Total Code Volume per Student (99th percentile)")
+    axes[0, 1].legend()
+
+    # Bottom-left: Code length vs pass rate
+    # Calculate pass rate per submission
+    def calc_pass_rate(pass_str):
+        try:
+            s = str(pass_str).strip()
+            if s == "" or s == "nan":
+                return np.nan
+            if "." in s:
+                s = str(int(float(s)))
+            return sum(c == "1" for c in s) / len(s)
+        except:
+            return np.nan
+
+    code_df["pass_rate"] = code_df["pass"].apply(calc_pass_rate)
+    code_with_pass = code_df.dropna(subset=["pass_rate"]).copy()
+
+    # Bin code lengths for better visualization
+    code_with_pass["length_bin"] = pd.qcut(code_with_pass["code_length"], q=10,
+                                            labels=False, duplicates="drop")
+
+    length_pass_stats = code_with_pass.groupby("length_bin").agg(
+        mean_pass_rate=("pass_rate", "mean"),
+        mean_length=("code_length", "mean"),
+        count=("pass_rate", "count")
+    ).reset_index()
+
+    axes[1, 0].scatter(length_pass_stats["mean_length"], length_pass_stats["mean_pass_rate"],
+                       s=length_pass_stats["count"] / 100, alpha=0.6)
+    axes[1, 0].set_xlabel("Average Code Length (tokens)")
+    axes[1, 0].set_ylabel("Average Pass Rate")
+    axes[1, 0].set_title("Code Length vs Pass Rate")
+    axes[1, 0].set_ylim(0, 1)
+
+    # Add trend line
+    z = np.polyfit(length_pass_stats["mean_length"], length_pass_stats["mean_pass_rate"], 1)
+    p = np.poly1d(z)
+    x_line = np.linspace(length_pass_stats["mean_length"].min(),
+                         length_pass_stats["mean_length"].max(), 100)
+    axes[1, 0].plot(x_line, p(x_line), "r--", alpha=0.8, label="Trend")
+    axes[1, 0].legend()
+
+    # Bottom-right: Code length distribution by course
+    courses = code_df["course_name_display"].unique()
+    data_for_box = [code_df[code_df["course_name_display"] == c]["code_length"].dropna()
+                    for c in courses]
+
+    bp = axes[1, 1].boxplot(data_for_box, tick_labels=courses, patch_artist=True)
+    for patch in bp["boxes"]:
+        patch.set_facecolor("lightblue")
+    axes[1, 1].set_ylabel("Code Length (tokens)")
+    axes[1, 1].set_title("Code Length Distribution by Course")
+    axes[1, 1].tick_params(axis="x", rotation=45)
+    axes[1, 1].set_yscale("log")
+
+    plt.tight_layout()
+    if save:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        plt.savefig(f"{OUTPUT_DIR}/code_length_distribution.png", dpi=300, bbox_inches="tight")
+        print(f"Saved: {OUTPUT_DIR}/code_length_distribution.png")
+    plt.show()
+
+    return student_code_volume
 
 
 def plot_course_comparison(df, save=True):
@@ -429,7 +589,7 @@ def plot_course_comparison(df, save=True):
     submit_df["pass_rate"] = submit_df["pass"].apply(calc_pass_rate)
 
     # Course stats
-    course_stats = submit_df.groupby("course_name").agg(
+    course_stats = submit_df.groupby("course_name_display").agg(
         n_students=("student_id", "nunique"),
         n_questions=("question_unittest_id", "nunique"),
         n_submissions=("student_id", "count"),
@@ -437,29 +597,29 @@ def plot_course_comparison(df, save=True):
     ).reset_index()
 
     # Top-left: Students per course
-    axes[0, 0].barh(course_stats["course_name"], course_stats["n_students"],
+    axes[0, 0].barh(course_stats["course_name_display"], course_stats["n_students"],
                     edgecolor="black", alpha=0.7)
     axes[0, 0].set_xlabel("Number of Students")
     axes[0, 0].set_title("Students per Course")
 
     # Top-right: Submissions per course
-    axes[0, 1].barh(course_stats["course_name"], course_stats["n_submissions"],
+    axes[0, 1].barh(course_stats["course_name_display"], course_stats["n_submissions"],
                     edgecolor="black", alpha=0.7)
     axes[0, 1].set_xlabel("Number of Submissions")
     axes[0, 1].set_title("Submissions per Course")
 
     # Bottom-left: Average pass rate by course
     course_stats_sorted = course_stats.sort_values("avg_pass_rate")
-    axes[1, 0].barh(course_stats_sorted["course_name"], course_stats_sorted["avg_pass_rate"],
+    axes[1, 0].barh(course_stats_sorted["course_name_display"], course_stats_sorted["avg_pass_rate"],
                     edgecolor="black", alpha=0.7)
     axes[1, 0].set_xlabel("Average Pass Rate")
     axes[1, 0].set_title("Average Pass Rate by Course")
     axes[1, 0].set_xlim(0, 1)
 
     # Bottom-right: Pass rate distribution by course (boxplot)
-    courses = submit_df["course_name"].unique()
-    data_for_box = [submit_df[submit_df["course_name"] == c]["pass_rate"].dropna() for c in courses]
-    bp = axes[1, 1].boxplot(data_for_box, labels=courses, patch_artist=True)
+    courses = submit_df["course_name_display"].unique()
+    data_for_box = [submit_df[submit_df["course_name_display"] == c]["pass_rate"].dropna() for c in courses]
+    bp = axes[1, 1].boxplot(data_for_box, tick_labels=courses, patch_artist=True)
     for patch in bp["boxes"]:
         patch.set_facecolor("lightblue")
     axes[1, 1].set_ylabel("Pass Rate")
@@ -469,7 +629,7 @@ def plot_course_comparison(df, save=True):
     plt.tight_layout()
     if save:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        plt.savefig(f"{OUTPUT_DIR}/course_comparison.png", dpi=150, bbox_inches="tight")
+        plt.savefig(f"{OUTPUT_DIR}/course_comparison.png", dpi=300, bbox_inches="tight")
         print(f"Saved: {OUTPUT_DIR}/course_comparison.png")
     plt.show()
 
@@ -504,6 +664,9 @@ def main():
 
     print("\n6. Course Comparison...")
     plot_course_comparison(main_data)
+
+    print("\n7. Code Length Distribution...")
+    plot_code_length_distribution(main_data)
 
     print("\n" + "=" * 60)
     print(f"All visualizations saved to: {OUTPUT_DIR}/")

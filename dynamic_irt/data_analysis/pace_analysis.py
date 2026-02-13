@@ -5,12 +5,18 @@ Converted from R to Python
 This script analyzes student submission pacing/timing data:
 - Time deltas between submissions
 - Statistical summaries of submission timing
-- Scatter plots of submits vs pause duration and final scores
+- Aggregate visualizations of submission patterns across all questions
 - Top submitters analysis and repeated ID detection
 
 Usage:
     python pace_analysis.py --course_name dsa_hk231
-    python pace_analysis.py --course_name dsa_hk231 --output_dir ./results
+    python pace_analysis.py --all_courses
+
+Output:
+    Files saved to pace_outputs/ directory:
+    - log_time_delta_density_{course}.png: Distribution of pause times
+    - aggregate_submission_patterns_{course}.png: Summary plots (4-panel)
+    - repeated_top_submitters_{course}.csv: Academic integrity analysis
 """
 
 import os
@@ -21,28 +27,95 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, login
+from tueplots import bundles
 
-# Set plot style
-plt.rcParams['font.family'] = 'serif'
-plt.rcParams['font.size'] = 18
-sns.set_style("whitegrid")
+# Set style for all plots with LaTeX fonts and tueplots
+plt.rcParams.update(bundles.icml2022())
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
+    "axes.labelsize": 10,
+    "font.size": 10,
+    "legend.fontsize": 8,
+    "xtick.labelsize": 8,
+    "ytick.labelsize": 8,
+})
+
+# Output directory for pace analysis results
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "pace_outputs")
 
 
 # -----------------------------------
 # Data Loading Functions
 # -----------------------------------
 
-def load_data_from_huggingface(course_name: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def sanitize_latex(text):
+    """Sanitize text for LaTeX rendering by escaping special characters."""
+    if pd.isna(text):
+        return text
+    text = str(text)
+    # Escape LaTeX special characters
+    replacements = {
+        '_': '\\_',
+        '&': '\\&',
+        '%': '\\%',
+        '$': '\\$',
+        '#': '\\#',
+        '{': '\\{',
+        '}': '\\}',
+        '~': '\\textasciitilde{}',
+        '^': '\\textasciicircum{}',
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+
+def beautify_course_name(course_name):
+    """Convert course codes to readable names.
+
+    Examples:
+        pf_hk232 -> Programming Fundamentals (Spring 2023)
+        dsa_hk231 -> Data Structures \\& Algorithms (Fall 2023)
+    """
+    if pd.isna(course_name):
+        return course_name
+
+    course_name = str(course_name).lower()
+
+    # Parse course type
+    if course_name.startswith("pf"):
+        course_type = "Programming Fundamentals"
+    elif course_name.startswith("dsa"):
+        course_type = "Data Structures \\& Algorithms"  # Escape & for LaTeX
+    else:
+        course_type = course_name.split("_")[0].upper()
+
+    # Parse semester (HK format: HKXYZ where X=year, Y=semester, Z=unused)
+    if "_hk" in course_name:
+        semester_code = course_name.split("_hk")[1][:3]
+        year = "20" + semester_code[0:2]
+        semester = "Fall" if semester_code[2] == "1" else "Spring"
+        return f"{course_type} ({semester} {year})"
+
+    return course_type
+
+
+def load_data_from_huggingface(course_name: str = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Load data from HuggingFace dataset stair-lab/code_insights_csv.
 
+    Args:
+        course_name: Course name to filter (e.g., dsa_hk231). If None, loads all courses.
+
     Returns:
-        main_data: Submission data filtered by course
+        main_data: Submission data (filtered by course if specified)
         question_infos: Question metadata
         course_infos: Course metadata
     """
-    # Download or use cached data
+    # Try local cache first
     cache_path = os.path.expanduser(
         "~/.cache/huggingface/hub/datasets--stair-lab--code_insights_csv/"
         "snapshots/99d53fe7c11f6302fb28b82fab5ebd77c00e5d12"
@@ -53,6 +126,9 @@ def load_data_from_huggingface(course_name: str) -> tuple[pd.DataFrame, pd.DataF
         path = cache_path
     else:
         print("Downloading from HuggingFace...")
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token:
+            login(token=hf_token)
         path = snapshot_download(
             repo_id="stair-lab/code_insights_csv", repo_type="dataset"
         )
@@ -61,17 +137,21 @@ def load_data_from_huggingface(course_name: str) -> tuple[pd.DataFrame, pd.DataF
     question_infos = pd.read_csv(f"{path}/question_infos.csv")
     course_infos = pd.read_csv(f"{path}/course_infos.csv")
 
-    # Get course_id for the specified course
-    course_row = course_infos[course_infos["course_name"] == course_name]
-    if len(course_row) == 0:
-        available = course_infos['course_name'].tolist()
-        raise ValueError(f"Course '{course_name}' not found. Available: {available}")
+    # Merge course names into main data
+    main_data = main_data.merge(course_infos, on="course_id", how="left")
 
-    course_id = course_row["course_id"].values[0]
-    print(f"Filtering data for course: {course_name} (id={course_id})")
+    # Filter by course if specified
+    if course_name:
+        if course_name not in course_infos["course_name"].values:
+            available = course_infos['course_name'].tolist()
+            raise ValueError(f"Course '{course_name}' not found. Available: {available}")
 
-    # Filter to specified course
-    main_data = main_data[main_data["course_id"] == course_id].copy()
+        main_data = main_data[main_data["course_name"] == course_name].copy()
+        print(f"Filtered to course: {course_name}")
+        print(f"Total submissions in course: {len(main_data):,}")
+    else:
+        print(f"Analyzing all courses")
+        print(f"Total submissions: {len(main_data):,}")
 
     return main_data, question_infos, course_infos
 
@@ -201,11 +281,10 @@ def create_scatterplot(df: pd.DataFrame, x_var: str, y_var: str,
         plt.close()
         return
 
-    # Create scatter plot
+    # Create scatter plot (without colorbar first)
     if color_var and color_var in plot_df.columns:
         scatter = ax.scatter(plot_df[x_var], plot_df[y_var], c=plot_df[color_var],
                             cmap='viridis', alpha=0.6, s=50)
-        plt.colorbar(scatter, ax=ax, label=color_var.replace('_', ' ').title())
     else:
         ax.scatter(plot_df[x_var], plot_df[y_var], alpha=0.6, color='steelblue', s=50)
 
@@ -217,18 +296,20 @@ def create_scatterplot(df: pd.DataFrame, x_var: str, y_var: str,
     line_y = slope * line_x + intercept
     ax.plot(line_x, line_y, 'r--', alpha=0.8, linewidth=2)
 
-    ax.set_xlabel(x_var.replace('_', ' ').title())
-    ax.set_ylabel(y_var.replace('_', ' ').title())
-    ax.set_title(title)
+    ax.set_xlabel(sanitize_latex(x_var.replace('_', ' ').title()))
+    ax.set_ylabel(sanitize_latex(y_var.replace('_', ' ').title()))
+    ax.set_title(sanitize_latex(title))
 
     # Log scale for median_time_delta_seconds
     if y_var == "median_time_delta_seconds":
         ax.set_yscale('log')
 
-    plt.tight_layout()
+    # Add colorbar AFTER setting labels and title
+    if color_var and color_var in plot_df.columns:
+        fig.colorbar(scatter, ax=ax, label=sanitize_latex(color_var.replace('_', ' ').title()))
 
     if output_path:
-        plt.savefig(output_path, dpi=150)
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
         print(f"Saved: {output_path}")
 
     plt.close()
@@ -265,25 +346,36 @@ def main():
     parser.add_argument(
         "--course_name",
         type=str,
-        default="dsa_hk231",
-        help="Course name (e.g., dsa_hk231, dsa_hk221, pf_hk232)"
+        default=None,
+        help="Course name (e.g., dsa_hk231, dsa_hk221, pf_hk232). If not specified, analyzes all courses."
     )
     parser.add_argument(
-        "--output_dir",
-        type=str,
-        default=".",
-        help="Output directory for plots and CSV files"
+        "--all_courses",
+        action="store_true",
+        help="Analyze all courses (same as not specifying --course_name)"
     )
     args = parser.parse_args()
 
     # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Determine course to analyze
+    if args.all_courses:
+        course_name = None
+        output_prefix = "all_courses"
+    elif args.course_name:
+        course_name = args.course_name
+        output_prefix = args.course_name
+    else:
+        # Default to a specific course if neither flag is set
+        course_name = "dsa_hk231"
+        output_prefix = "dsa_hk231"
 
     # -----------------------------------
     # Data Import
     # -----------------------------------
     print("Loading data from HuggingFace...")
-    main_data, question_infos, course_infos = load_data_from_huggingface(args.course_name)
+    main_data, question_infos, course_infos = load_data_from_huggingface(course_name)
     print(f"Loaded {len(main_data)} submissions")
 
     # Prepare data
@@ -340,11 +432,11 @@ def main():
 
         ax.set_xlabel('Minutes (log scale)')
         ax.set_ylabel('Density')
-        ax.set_title('Density Plot of log(time_delta)')
+        ax.set_title(f'Density Plot of log(time\\_delta) - {beautify_course_name(output_prefix)}')
         ax.legend()
         plt.tight_layout()
-        output_path = os.path.join(args.output_dir, "log_time_delta_density_plot.png")
-        plt.savefig(output_path, dpi=150)
+        output_path = os.path.join(OUTPUT_DIR, f"log_time_delta_density_{output_prefix}.png")
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
         plt.close()
         print(f"\nSaved: {output_path}")
 
@@ -376,29 +468,101 @@ def main():
         print(f"Percentage longer than 3 hours: {calculate_percentage_over_hours(filtered_data, 3):.2f}%")
 
     # -----------------------------------
-    # Research Questions Analysis
+    # Aggregate Analysis (All Questions Combined)
     # -----------------------------------
-    print("\n--- Research Questions Analysis ---")
+    print("\n--- Aggregate Submission Pattern Analysis ---")
 
-    for name, df in filtered_data_frames.items():
-        df_analysis = analyze_dataframe(df)
+    # Combine all filtered data into one aggregate analysis
+    all_student_data = analyze_dataframe(filtered_data)
 
-        if len(df_analysis) < 3:
-            continue
+    if len(all_student_data) >= 3:
+        # Create a 2x2 grid of aggregate summary plots
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-        # Submits vs Pause Duration plot
-        create_scatterplot(
-            df_analysis, "total_submits", "median_time_delta_seconds", "final_score",
-            f"Submits vs Pause Duration for {name}",
-            os.path.join(args.output_dir, f"scatterplot_submits_pause_{name}.png")
+        # Top-left: Submits vs Pause Duration (colored by final score)
+        ax = axes[0, 0]
+        scatter = ax.scatter(
+            all_student_data["total_submits"],
+            all_student_data["median_time_delta_seconds"],
+            c=all_student_data["final_score"],
+            cmap='viridis', alpha=0.5, s=30
         )
+        ax.set_xlabel(sanitize_latex("Total Submissions"))
+        ax.set_ylabel(sanitize_latex("Median Pause Time (seconds)"))
+        ax.set_title(sanitize_latex("Submission Count vs Pause Duration"))
+        ax.set_yscale('log')
+        fig.colorbar(scatter, ax=ax, label=sanitize_latex("Final Score"))
 
-        # Submits vs Final Score plot
-        create_scatterplot(
-            df_analysis, "total_submits", "final_score", None,
-            f"Submits vs Final Score for {name}",
-            os.path.join(args.output_dir, f"scatterplot_submits_score_{name}.png")
+        # Top-right: Submits vs Final Score
+        ax = axes[0, 1]
+        ax.scatter(
+            all_student_data["total_submits"],
+            all_student_data["final_score"],
+            alpha=0.5, color='steelblue', s=30
         )
+        # Add regression line
+        if len(all_student_data) > 2:
+            # Drop NaN values from both columns together
+            regression_data = all_student_data[["total_submits", "final_score"]].dropna()
+            if len(regression_data) > 2:
+                slope, intercept, r_value, _, _ = stats.linregress(
+                    regression_data["total_submits"],
+                    regression_data["final_score"]
+                )
+                line_x = np.linspace(
+                    regression_data["total_submits"].min(),
+                    regression_data["total_submits"].max(), 100
+                )
+                line_y = slope * line_x + intercept
+                ax.plot(line_x, line_y, 'r--', alpha=0.8, linewidth=2,
+                       label=f'$R^2={r_value**2:.3f}$')
+                ax.legend()
+        ax.set_xlabel(sanitize_latex("Total Submissions"))
+        ax.set_ylabel(sanitize_latex("Final Score"))
+        ax.set_title(sanitize_latex("Submission Count vs Performance"))
+        ax.set_ylim(0, 1)
+
+        # Bottom-left: Histogram of submission counts
+        ax = axes[1, 0]
+        ax.hist(all_student_data["total_submits"], bins=50,
+                edgecolor='black', alpha=0.7)
+        ax.axvline(all_student_data["total_submits"].median(),
+                  color='red', linestyle='--',
+                  label=f'Median: {all_student_data["total_submits"].median():.0f}')
+        ax.set_xlabel(sanitize_latex("Total Submissions"))
+        ax.set_ylabel(sanitize_latex("Number of Students"))
+        ax.set_title(sanitize_latex("Distribution of Submission Counts"))
+        ax.legend()
+
+        # Bottom-right: Histogram of pause times
+        ax = axes[1, 1]
+        pause_times = all_student_data["median_time_delta_seconds"].dropna()
+        pause_times_filtered = pause_times[pause_times > 0]
+        if len(pause_times_filtered) > 0:
+            ax.hist(pause_times_filtered, bins=50, edgecolor='black', alpha=0.7)
+            ax.axvline(pause_times_filtered.median(), color='red', linestyle='--',
+                      label=f'Median: {pause_times_filtered.median():.1f}s')
+            ax.set_xscale('log')
+            ax.set_xlabel(sanitize_latex("Median Pause Time (seconds, log scale)"))
+            ax.set_ylabel(sanitize_latex("Number of Students"))
+            ax.set_title(sanitize_latex("Distribution of Pause Times"))
+            ax.legend()
+
+        plt.suptitle(f'Aggregate Submission Patterns - {beautify_course_name(output_prefix)}',
+                    fontsize=14, y=0.995)
+
+        output_path = os.path.join(OUTPUT_DIR, f"aggregate_submission_patterns_{output_prefix}.png")
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+        plt.close()
+        print(f"Saved: {output_path}")
+
+        # Print summary statistics
+        print(f"\nAggregate Statistics:")
+        print(f"  Total students analyzed: {len(all_student_data):,}")
+        print(f"  Median submissions per student: {all_student_data['total_submits'].median():.0f}")
+        print(f"  Mean submissions per student: {all_student_data['total_submits'].mean():.1f}")
+        print(f"  Median pause time: {pause_times_filtered.median():.1f} seconds")
+        print(f"  Mean pause time: {pause_times_filtered.mean():.1f} seconds")
 
     # -----------------------------------
     # Top Submitters Analysis
@@ -437,11 +601,15 @@ def main():
         print("\n--- IDs appearing in top submitters more than once ---")
         if len(repeated_ids) > 0:
             print(repeated_ids.to_string(index=False))
-            output_path = os.path.join(args.output_dir, "repeated_top_submitters.csv")
+            output_path = os.path.join(OUTPUT_DIR, f"repeated_top_submitters_{output_prefix}.csv")
             repeated_ids.to_csv(output_path, index=False)
             print(f"\nSaved: {output_path}")
         else:
             print("No repeated IDs found among top submitters")
+
+    print(f"\n{'='*60}")
+    print(f"All outputs saved to: {OUTPUT_DIR}/")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":

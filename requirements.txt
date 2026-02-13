@@ -13,4 +13,5 @@ gdown
 seaborn
 scipy
 huggingface_hub
+tueplots  # For publication-quality plots with LaTeX fonts
 vllm  # Optional: for LLM-based evaluation (requires GPU)

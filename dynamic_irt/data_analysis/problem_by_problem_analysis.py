@@ -2,17 +2,20 @@
 Problem-by-problem Analysis
 Converted from R Markdown to Python
 
-Author: Karen D. Wang (original R), converted to Python
-Date: 2024-12-03
-
 This script analyzes student submission data to examine:
 - Marks achieved and number of steps taken by individual students
 - Correlation between steps, edit distance, and marks
-- Visualizations of student progress patterns
+- Aggregate visualizations of patterns across all problems
 
 Usage:
     python problem_by_problem_analysis.py --course_name dsa_hk231
-    python problem_by_problem_analysis.py --course_name dsa_hk231 --output_dir ./results
+    python problem_by_problem_analysis.py --all_courses
+
+Output:
+    Files saved to problem_outputs/ directory:
+    - individual_questions_steps_and_scores.csv: Per-problem statistics
+    - cor_step_edit.csv: Correlation analysis
+    - aggregate_problem_patterns.png: Summary visualizations (300 DPI)
 """
 
 import os
@@ -22,24 +25,39 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, login
+from tueplots import bundles
 
-# Set plot style
-plt.rcParams['font.family'] = 'serif'
-plt.rcParams['font.size'] = 14
-sns.set_style("whitegrid")
+# Set style for all plots with LaTeX fonts and tueplots
+plt.rcParams.update(bundles.icml2022())
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
+    "axes.labelsize": 10,
+    "font.size": 10,
+    "legend.fontsize": 8,
+    "xtick.labelsize": 8,
+    "ytick.labelsize": 8,
+})
+
+# Output directory for problem analysis results
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "problem_outputs")
 
 
-def load_data_from_huggingface(course_name: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_data_from_huggingface(course_name: str = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Load data from HuggingFace dataset stair-lab/code_insights_csv.
 
+    Args:
+        course_name: Course name to filter (e.g., dsa_hk231). If None, loads all courses.
+
     Returns:
-        main_data: Submission data filtered by course
+        main_data: Submission data (filtered by course if specified)
         question_infos: Question metadata
         course_infos: Course metadata
     """
-    # Download or use cached data
+    # Try local cache first
     cache_path = os.path.expanduser(
         "~/.cache/huggingface/hub/datasets--stair-lab--code_insights_csv/"
         "snapshots/99d53fe7c11f6302fb28b82fab5ebd77c00e5d12"
@@ -50,6 +68,9 @@ def load_data_from_huggingface(course_name: str) -> tuple[pd.DataFrame, pd.DataF
         path = cache_path
     else:
         print("Downloading from HuggingFace...")
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token:
+            login(token=hf_token)
         path = snapshot_download(
             repo_id="stair-lab/code_insights_csv", repo_type="dataset"
         )
@@ -58,17 +79,21 @@ def load_data_from_huggingface(course_name: str) -> tuple[pd.DataFrame, pd.DataF
     question_infos = pd.read_csv(f"{path}/question_infos.csv")
     course_infos = pd.read_csv(f"{path}/course_infos.csv")
 
-    # Get course_id for the specified course
-    course_row = course_infos[course_infos["course_name"] == course_name]
-    if len(course_row) == 0:
-        available = course_infos['course_name'].tolist()
-        raise ValueError(f"Course '{course_name}' not found. Available: {available}")
+    # Merge course names into main data
+    main_data = main_data.merge(course_infos, on="course_id", how="left")
 
-    course_id = course_row["course_id"].values[0]
-    print(f"Filtering data for course: {course_name} (id={course_id})")
+    # Filter by course if specified
+    if course_name:
+        if course_name not in course_infos["course_name"].values:
+            available = course_infos['course_name'].tolist()
+            raise ValueError(f"Course '{course_name}' not found. Available: {available}")
 
-    # Filter to specified course
-    main_data = main_data[main_data["course_id"] == course_id].copy()
+        main_data = main_data[main_data["course_name"] == course_name].copy()
+        print(f"Filtered to course: {course_name}")
+        print(f"Total submissions in course: {len(main_data):,}")
+    else:
+        print(f"Analyzing all courses")
+        print(f"Total submissions: {len(main_data):,}")
 
     return main_data, question_infos, course_infos
 
@@ -222,7 +247,7 @@ def create_edit_distance_bar_plot(df: pd.DataFrame, output_path: str = "edit_dis
     ax.set_xlabel('Step')
     ax.set_ylabel('Edit Distance')
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150)
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {output_path}")
 
@@ -244,7 +269,7 @@ def create_dotplot(data: pd.Series, output_path: str, xlabel: str = "Total Numbe
     ax.set_xlabel(xlabel)
     ax.set_ylabel('Count')
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150)
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {output_path}")
 
@@ -282,7 +307,7 @@ def create_correlation_scatterplot(x: pd.Series, y: pd.Series,
     ax.set_ylabel(ylabel)
     ax.set_ylim(bottom=0)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150)
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {output_path}")
 
@@ -360,23 +385,34 @@ def main():
     parser.add_argument(
         "--course_name",
         type=str,
-        default="dsa_hk231",
-        help="Course name (e.g., dsa_hk231, dsa_hk221, pf_hk232)"
+        default=None,
+        help="Course name (e.g., dsa_hk231, dsa_hk221, pf_hk232). If not specified, analyzes all courses."
     )
     parser.add_argument(
-        "--output_dir",
-        type=str,
-        default=".",
-        help="Output directory for plots and CSV files"
+        "--all_courses",
+        action="store_true",
+        help="Analyze all courses (same as not specifying --course_name)"
     )
     args = parser.parse_args()
 
     # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Determine course to analyze
+    if args.all_courses:
+        course_name = None
+        output_prefix = "all_courses"
+    elif args.course_name:
+        course_name = args.course_name
+        output_prefix = args.course_name
+    else:
+        # Default to all courses
+        course_name = None
+        output_prefix = "all_courses"
 
     # Load data from HuggingFace
     print("Loading data from HuggingFace...")
-    main_data, question_infos, course_infos = load_data_from_huggingface(args.course_name)
+    main_data, question_infos, course_infos = load_data_from_huggingface(course_name)
     print(f"Loaded {len(main_data)} submissions")
 
     # Prepare data for analysis
@@ -392,26 +428,129 @@ def main():
         all_summaries.append(summary)
 
     final_summary = pd.concat(all_summaries, ignore_index=True)
-    output_path = os.path.join(args.output_dir, "individual_questions_steps_and_scores.csv")
+    output_path = os.path.join(OUTPUT_DIR, f"individual_questions_steps_and_scores_{output_prefix}.csv")
     final_summary.to_csv(output_path, index=False)
-    print(f"Saved: {output_path}")
-    print(final_summary.to_string())
+    print(f"\nSaved: {output_path}")
 
-    # Analyze and plot all dataframes
-    print("\n--- Analyzing Correlations and Creating Plots ---")
+    # Print aggregate statistics
+    print("\n--- Aggregate Statistics Across All Problems ---")
+    print(f"Number of problems analyzed: {len(final_summary)}")
+    print(f"Average steps per problem: {final_summary['mean_step'].mean():.1f}")
+    print(f"Average marks per problem: {final_summary['mean_marks'].mean():.3f}")
+    print(f"Average students per problem: {final_summary['n'].mean():.1f}")
+
+    # Analyze correlations (skip individual plots)
+    print("\n--- Analyzing Correlations ---")
     correlations = []
     for df_name, df in data_frames.items():
         # Remove 'df_data_' prefix for cleaner names
         clean_name = df_name.replace("df_data_", "")
-        result = analyze_and_plot_dataframe(df, clean_name, args.output_dir)
-        correlations.append(result)
+
+        # Compute correlations without creating individual plots
+        df_filtered = df[df['id'].notna()].copy()
+        summarized = df_filtered.groupby('id').agg(
+            max_step=('step', 'max'),
+            mean_edit_distance=('edit_distance', 'mean') if 'edit_distance' in df_filtered.columns else ('step', lambda x: np.nan),
+            marks=('marks', 'max')
+        ).reset_index()
+        summarized = summarized[summarized['marks'] > 0]
+
+        if len(summarized) >= 3:
+            cor_step_edit = summarized['max_step'].corr(summarized['mean_edit_distance'])
+            cor_edit_marks = summarized['mean_edit_distance'].corr(summarized['marks'])
+            cor_step_marks = summarized['max_step'].corr(summarized['marks'])
+        else:
+            cor_step_edit = cor_edit_marks = cor_step_marks = np.nan
+
+        correlations.append(pd.DataFrame({
+            'dataframe': [clean_name],
+            'cor_step_edit': [cor_step_edit],
+            'cor_edit_marks': [cor_edit_marks],
+            'cor_step_marks': [cor_step_marks]
+        }))
 
     all_correlations = pd.concat(correlations, ignore_index=True)
-    output_path = os.path.join(args.output_dir, "cor_step_edit.csv")
+    output_path = os.path.join(OUTPUT_DIR, f"cor_step_edit_{output_prefix}.csv")
     all_correlations.to_csv(output_path, index=False)
-    print("\nCorrelation Summary:")
-    print(all_correlations.to_string())
+
+    # Print correlation summary
+    print(f"\nCorrelation Summary (averaged across {len(all_correlations)} problems):")
+    print(f"  Steps ↔ Edit Distance: r = {all_correlations['cor_step_edit'].mean():.3f}")
+    print(f"  Edit Distance ↔ Marks: r = {all_correlations['cor_edit_marks'].mean():.3f}")
+    print(f"  Steps ↔ Marks: r = {all_correlations['cor_step_marks'].mean():.3f}")
     print(f"\nSaved: {output_path}")
+
+    # Create aggregate visualization
+    print("\n--- Creating Aggregate Visualization ---")
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    # Top-left: Distribution of mean steps across problems
+    axes[0, 0].hist(final_summary['mean_step'].dropna(), bins=30, edgecolor='black', alpha=0.7)
+    axes[0, 0].axvline(final_summary['mean_step'].mean(), color='red', linestyle='--',
+                       label=f"Mean: {final_summary['mean_step'].mean():.1f}")
+    axes[0, 0].set_xlabel('Average Steps per Problem')
+    axes[0, 0].set_ylabel('Number of Problems')
+    axes[0, 0].set_title('Distribution of Problem Difficulty (Steps)')
+    axes[0, 0].legend()
+
+    # Top-right: Distribution of mean marks across problems
+    axes[0, 1].hist(final_summary['mean_marks'].dropna(), bins=30, edgecolor='black', alpha=0.7)
+    axes[0, 1].axvline(final_summary['mean_marks'].mean(), color='red', linestyle='--',
+                       label=f"Mean: {final_summary['mean_marks'].mean():.3f}")
+    axes[0, 1].set_xlabel('Average Score per Problem')
+    axes[0, 1].set_ylabel('Number of Problems')
+    axes[0, 1].set_title('Distribution of Problem Success Rates')
+    axes[0, 1].legend()
+
+    # Bottom-left: Steps vs Marks relationship
+    axes[1, 0].scatter(final_summary['mean_step'], final_summary['mean_marks'], alpha=0.6, s=50)
+    if len(final_summary.dropna(subset=['mean_step', 'mean_marks'])) > 2:
+        valid_data = final_summary.dropna(subset=['mean_step', 'mean_marks'])
+        slope, intercept, r_value, _, _ = stats.linregress(valid_data['mean_step'], valid_data['mean_marks'])
+        line_x = np.linspace(valid_data['mean_step'].min(), valid_data['mean_step'].max(), 100)
+        line_y = slope * line_x + intercept
+        axes[1, 0].plot(line_x, line_y, 'r--', alpha=0.8, linewidth=2,
+                       label=f'$r={r_value:.3f}$')
+        axes[1, 0].legend()
+    axes[1, 0].set_xlabel('Average Steps')
+    axes[1, 0].set_ylabel('Average Marks')
+    axes[1, 0].set_title('Problem Difficulty vs Success Rate')
+    axes[1, 0].set_ylim(0, 1)
+
+    # Bottom-right: Correlation heatmap
+    cor_data = all_correlations[['cor_step_edit', 'cor_edit_marks', 'cor_step_marks']].mean()
+    cor_matrix = np.array([[1.0, cor_data['cor_step_edit'], cor_data['cor_step_marks']],
+                           [cor_data['cor_step_edit'], 1.0, cor_data['cor_edit_marks']],
+                           [cor_data['cor_step_marks'], cor_data['cor_edit_marks'], 1.0]])
+
+    im = axes[1, 1].imshow(cor_matrix, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+    axes[1, 1].set_xticks([0, 1, 2])
+    axes[1, 1].set_yticks([0, 1, 2])
+    axes[1, 1].set_xticklabels(['Steps', 'Edit Dist', 'Marks'], fontsize=8)
+    axes[1, 1].set_yticklabels(['Steps', 'Edit Dist', 'Marks'], fontsize=8)
+    axes[1, 1].set_title('Average Correlations')
+
+    # Add correlation values to heatmap
+    for i in range(3):
+        for j in range(3):
+            axes[1, 1].text(j, i, f'{cor_matrix[i, j]:.2f}',
+                           ha="center", va="center", color="black", fontsize=10)
+
+    plt.suptitle(f'Problem-by-Problem Analysis Summary - {output_prefix.upper()}',
+                fontsize=14, y=0.995)
+
+    # Add colorbar AFTER suptitle
+    fig.colorbar(im, ax=axes[1, 1], label='Correlation')
+
+    # Don't use tight_layout with colorbar - use bbox_inches='tight' instead
+    output_path = os.path.join(OUTPUT_DIR, f"aggregate_problem_patterns_{output_prefix}.png")
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {output_path}")
+
+    print(f"\n{'='*60}")
+    print(f"All outputs saved to: {OUTPUT_DIR}/")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
