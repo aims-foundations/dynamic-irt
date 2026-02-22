@@ -12,10 +12,10 @@ from cmdstanpy import CmdStanModel
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-STAN_FILE = "dynamic_rasch.stan"
+STAN_FILE = "dynamic_irt.stan"
 REMOTE_URL = "https://huggingface.co/datasets/CodeInsightTeam/code_insights_csv/resolve/main/codeinsights_student_response.csv"
 LOCAL_CACHE = Path("codeinsights_student_response.csv")
-OUTPUT_DIR = Path("output_dynamic_rasch")
+OUTPUT_DIR = Path("output_dynamic_irt")
 
 SAMPLING_CONFIG = dict(
     seed=42,
@@ -268,7 +268,7 @@ def save_results(fit, stan_data: dict, person_map: pd.DataFrame,
 
 def main():
     print("=" * 60)
-    print("Dynamic Rasch Model Fitting")
+    print("Dynamic IRT Model Fitting")
     print("=" * 60)
 
     # Load data
