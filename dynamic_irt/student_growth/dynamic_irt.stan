@@ -37,7 +37,7 @@ model {
   // Priors
   beta          ~ normal(0, 1);
   theta_0       ~ normal(0, 1);
-  theta_growth  ~ normal(0, 0.5);
+  theta_growth  ~ normal(0, 0.01);
   sigma         ~ exponential(1);
   to_vector(eta) ~ normal(0, 1);
 
