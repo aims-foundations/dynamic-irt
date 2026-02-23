@@ -146,12 +146,11 @@ log_success "Output directories created at: ${OUTPUT_DIR}"
 log_step "1" "Data Preprocessing"
 log_info "Downloading data from HuggingFace and generating scenario datasets..."
 
-cd "${BASE_DIR}"
-python data_preprocessing.py
+(cd "${BASE_DIR}/llm_simulator" && python data_preprocessing.py)
 
 # Copy generated files to output directory
-if [ -d "${BASE_DIR}/data" ]; then
-    cp -r "${BASE_DIR}/data/"* "${OUTPUT_DIR}/scenario_data/" 2>/dev/null || true
+if [ -d "${BASE_DIR}/llm_simulator/data" ]; then
+    cp -r "${BASE_DIR}/llm_simulator/data/"* "${OUTPUT_DIR}/scenario_data/" 2>/dev/null || true
 fi
 
 log_success "Data preprocessing complete. Scenario CSVs generated."
@@ -162,15 +161,16 @@ if [ "$SKIP_LLM" = false ]; then
     log_info "Running LLM evaluation on GPU..."
     log_info "This step may take 10-15 hours per model."
 
-    if [ -f "${BASE_DIR}/run_opensource_models.py" ]; then
+    if [ -f "${BASE_DIR}/llm_simulator/run_single_turn.py" ]; then
         if [ -n "$MODELS_TO_RUN" ]; then
-            python "${BASE_DIR}/run_opensource_models.py" --models "$MODELS_TO_RUN" --output "${OUTPUT_DIR}"
+            (cd "${BASE_DIR}/llm_simulator" && python run_single_turn.py --models "$MODELS_TO_RUN" --output "${OUTPUT_DIR}")
         else
-            python "${BASE_DIR}/run_opensource_models.py" --output "${OUTPUT_DIR}"
+            # Default: open-source models only (no API keys required)
+            (cd "${BASE_DIR}/llm_simulator" && python run_single_turn.py --models "llama,gemma,qwen" --output "${OUTPUT_DIR}")
         fi
         log_success "LLM evaluation complete."
     else
-        log_warning "run_opensource_models.py not found. Skipping LLM evaluation."
+        log_warning "llm_simulator/run_single_turn.py not found. Skipping LLM evaluation."
         log_info "Checking for existing results..."
     fi
 else
@@ -184,13 +184,13 @@ log_step "3" "Compute Metrics"
 # Check if any LLM results exist before computing metrics
 if [ -d "${OUTPUT_DIR}/scenario_results" ] && [ "$(ls -A ${OUTPUT_DIR}/scenario_results 2>/dev/null)" ]; then
     log_info "Computing functional correctness, AST similarity, CodeBERT similarity..."
-    python "${BASE_DIR}/compute_metrics.py" || {
+    (cd "${BASE_DIR}/data_analysis" && python compute_metrics.py) || {
         log_warning "Metrics computation failed. This may be due to missing LLM results."
     }
 
     # Copy results to output directory
-    if [ -f "${BASE_DIR}/all_results.json" ]; then
-        cp "${BASE_DIR}/all_results.json" "${OUTPUT_DIR}/metrics/"
+    if [ -f "${BASE_DIR}/data_analysis/all_results.json" ]; then
+        cp "${BASE_DIR}/data_analysis/all_results.json" "${OUTPUT_DIR}/metrics/"
     fi
     log_success "Metrics computation complete."
 else
@@ -204,7 +204,7 @@ log_step "4" "Psychometric Analysis (IRT)"
 # Check if any LLM results exist before running psychometric analysis
 if [ -d "${OUTPUT_DIR}/scenario_results" ] && [ "$(ls -A ${OUTPUT_DIR}/scenario_results 2>/dev/null)" ]; then
     log_info "Computing ability and difficulty parameters using Item Response Theory..."
-    python "${BASE_DIR}/psychometrics_metrics.py" --data "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/psychometrics" || {
+    python "${BASE_DIR}/data_analysis/psychometrics_metrics.py" --data "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/psychometrics" || {
         log_warning "Psychometric analysis failed. This may be due to missing LLM results."
     }
     log_success "Psychometric analysis complete."
@@ -216,10 +216,10 @@ fi
 log_step "5" "Testlet Response Theory Analysis (R)"
 
 if command -v Rscript &> /dev/null; then
-    if [ -f "${BASE_DIR}/codeinsights_testlet_analysis.R" ]; then
+    if [ -f "${BASE_DIR}/dynamic_irt/codeinsights_testlet_analysis.R" ]; then
         log_info "Running Bayesian TRT analysis..."
         log_info "This may take 1-2 hours for MCMC sampling."
-        Rscript "${BASE_DIR}/codeinsights_testlet_analysis.R" || {
+        Rscript "${BASE_DIR}/dynamic_irt/codeinsights_testlet_analysis.R" || {
             log_warning "TRT analysis failed. Check R dependencies (brms, dplyr, tidyr, ggplot2, pROC)."
         }
         log_success "TRT analysis complete."
@@ -234,9 +234,9 @@ fi
 if [ "$SKIP_PLOTS" = false ]; then
     log_step "6" "Generate Publication Figures"
 
-    if [ -f "${BASE_DIR}/generate_plots.py" ]; then
+    if [ -f "${BASE_DIR}/data_analysis/generate_plots.py" ]; then
         log_info "Generating scenario result plots and psychometric figures..."
-        python "${BASE_DIR}/generate_plots.py" --output "${OUTPUT_DIR}/plots" --metrics "${OUTPUT_DIR}/metrics"
+        python "${BASE_DIR}/data_analysis/generate_plots.py" --output "${OUTPUT_DIR}/plots" --metrics "${OUTPUT_DIR}/metrics"
         log_success "Plots generated in ${OUTPUT_DIR}/plots/"
     else
         log_warning "generate_plots.py not found. Skipping plot generation."
@@ -248,9 +248,9 @@ fi
 # ─── Step 7: Generate Reproducibility Report ───────────────────────────────────
 log_step "7" "Generate Reproducibility Report"
 
-if [ -f "${BASE_DIR}/generate_report.py" ]; then
+if [ -f "${OUTPUT_DIR}/generate_report.py" ]; then
     log_info "Comparing results against paper values..."
-    python "${BASE_DIR}/generate_report.py" \
+    python "${OUTPUT_DIR}/generate_report.py" \
         --metrics "${OUTPUT_DIR}/metrics/all_results.json" \
         --correlations "${OUTPUT_DIR}/psychometrics/correlations/all_correlations.json" \
         --output "${OUTPUT_DIR}/reproducibility_report.md"

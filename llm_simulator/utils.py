@@ -17,7 +17,7 @@ from config import (
     STOP_ANSWER,
     USER_TAG,
 )
-from grading_engine.engine import CPPEvaluator
+from grading_engine import CPPEvaluator
 from Levenshtein import distance
 from openai import OpenAI
 from transformers import AutoTokenizer, GenerationConfig

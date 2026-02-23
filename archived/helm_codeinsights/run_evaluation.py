@@ -38,6 +38,10 @@ MODELS = {
         "name": "Qwen/Qwen2.5-14B-Instruct",
         "base_url": "http://localhost:8003/v1",
     },
+    "glm": {
+        "name": "glm-4.7-awq",
+        "base_url": "http://localhost:8240/v1",
+    },
 }
 
 SCENARIOS = {
@@ -142,31 +146,12 @@ def run_scenario(model_key, scenario_key, output_dir, max_instances=None):
     print(f"Running {scenario_config['name']} with {model_config['name']}")
     print(f"{'='*60}")
 
-    # Check if already completed
-    output_path = Path(output_dir) / model_key / scenario_key
-    results_file = output_path / "results.json"
-    if results_file.exists():
-        try:
-            with open(results_file) as f:
-                existing = json.load(f)
-            # Skip if we have at least 300 results (S1 has 301)
-            if len(existing) >= 300:
-                print(f"Already completed {len(existing)} instances, skipping...")
-                return existing
-        except:
-            pass
-
     # Create client
     client = create_client(model_config)
 
     # Get scenario instances
     scenario = scenario_config["class"](num_testcases=-1)
     instances = scenario.get_instances("all")
-
-    # Default limit for large scenarios
-    if max_instances is None and len(instances) > 500:
-        max_instances = 500
-        print(f"Limiting to {max_instances} instances (original: {len(instances)})")
 
     if max_instances:
         instances = instances[:max_instances]
@@ -177,9 +162,25 @@ def run_scenario(model_key, scenario_key, output_dir, max_instances=None):
     output_path = Path(output_dir) / model_key / scenario_key
     output_path.mkdir(parents=True, exist_ok=True)
 
+    # Resume from checkpoint if exists
     results = []
+    results_file = output_path / "results.json"
+    start_idx = 0
+    if results_file.exists():
+        try:
+            with open(results_file) as f:
+                results = json.load(f)
+            if len(results) >= len(instances):
+                print(f"Already completed {len(results)} instances, skipping...")
+                return results
+            start_idx = len(results)
+            print(f"Resuming from instance {start_idx + 1} ({start_idx} already done)")
+        except:
+            pass
 
     for i, instance in enumerate(instances):
+        if i < start_idx:
+            continue
         print(f"\rProcessing instance {i+1}/{len(instances)}...", end="", flush=True)
 
         prompt = instance.input.text

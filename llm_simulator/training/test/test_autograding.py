@@ -1,4 +1,5 @@
-from grading_engine.engine import CPPEvaluator
+import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
+from grading_engine import CPPEvaluator
 
 
 def testcase1(evaluator):
