@@ -127,11 +127,58 @@ class MistralRunner(_BaseLLMRunner):
         return text
 
 
+class VLLMRunner(_BaseLLMRunner):
+    """Open-source model runner using a local vLLM engine.
+
+    The engine is initialised once at construction time (weights are loaded
+    into GPU memory), so subsequent ``call()`` invocations are fast.
+
+    Args:
+        model_hf_id:          HuggingFace model ID or local path.
+        max_tokens:           Maximum tokens to generate per call.
+        temperature:          Sampling temperature (0.0 = greedy).
+        tensor_parallel_size: Number of GPUs to shard across.
+    """
+
+    def __init__(
+        self,
+        model_hf_id: str,
+        max_tokens: int = 4000,
+        temperature: float = 0.0,
+        tensor_parallel_size: int = 4,
+    ):
+        try:
+            from vllm import LLM, SamplingParams
+        except ImportError as exc:
+            raise ImportError(
+                "vllm is required for open-source model inference. "
+                "Install with: pip install vllm"
+            ) from exc
+
+        self.llm = LLM(
+            model=model_hf_id,
+            tensor_parallel_size=tensor_parallel_size,
+            dtype="auto",
+            trust_remote_code=True,   # required for GLM and some other models
+        )
+        self.sampling_params = SamplingParams(
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stop=["\n```"],
+        )
+
+    def call(self, prompt: str) -> str:
+        outputs = self.llm.generate([prompt], self.sampling_params)
+        return outputs[0].outputs[0].text
+
+
 MODEL_REGISTRY: Dict[str, callable] = {
     "claude-sonnet-4":  lambda: ClaudeRunner("claude-sonnet-4-20250514"),
     "gpt-4.1-nano":     lambda: OpenAIRunner("gpt-4.1-nano"),
     "gemini-2.0-flash": lambda: GeminiRunner("gemini-2.0-flash"),
     "mistral-large":    lambda: MistralRunner("mistral-large-latest"),
+    # Open-source models (served via vLLM on local GPUs)
+    "glm":              lambda: VLLMRunner("QuantTrio/GLM-4.7-AWQ", tensor_parallel_size=4),
 }
 
 # ── Data structures ───────────────────────────────────────────────────────────

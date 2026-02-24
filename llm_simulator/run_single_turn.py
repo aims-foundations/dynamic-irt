@@ -85,6 +85,13 @@ MODEL_CONFIGS = {
         "max_tokens": 2048,
         "temperature": 0.0,
     },
+    "glm": {
+        "name": "quanttrio_glm-4.7-awq",
+        "hf_id": "QuantTrio/GLM-4.7-AWQ",
+        "backend": "vllm",
+        "max_tokens": 4000,
+        "temperature": 0.0,
+    },
 }
 
 SCENARIOS = ["S1", "S2", "S3", "S4"]
