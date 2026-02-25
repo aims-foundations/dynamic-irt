@@ -414,7 +414,7 @@ def main():
     except FileNotFoundError as e:
         print(f"\nWarning: {e}")
         print(f"Please train CIRT first using:")
-        print(f"  python CodeInsights/dynamic_irt/cirt/continuous_irt.py --course_name {args.course_name}")
+        print(f"  python -m dynamic_irt.cirt --course_name {args.course_name}")
         cirt_metrics = None
 
     # Evaluate GPIRT

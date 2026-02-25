@@ -33,7 +33,7 @@ if [ -f "results/${COURSE_NAME}_${CIRT_CONCENTRATION}/model.pkl" ]; then
     echo "   ✓ CIRT model already exists. Skipping training."
     echo "   (Delete results/${COURSE_NAME}_${CIRT_CONCENTRATION}/ to retrain)"
 else
-    python cirt/continuous_irt.py \
+    python cirt.py \
         --course_name "$COURSE_NAME" \
         --seed "$SEED" \
         --concentration "$CIRT_CONCENTRATION" \

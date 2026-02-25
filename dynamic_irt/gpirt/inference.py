@@ -60,8 +60,9 @@ def infer_hmc(
 
     kernel = NUTS(
         irt_pyro_model,
-        jit_compile=True,
-        ignore_jit_warnings=True,
+        jit_compile=False,
+        target_accept_prob=0.8,
+        max_tree_depth=10,
     )
 
     # We'll define a hook_fn to log potential energy values during inference.
@@ -106,11 +107,14 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=120)
     parser.add_argument("--warmup_steps", type=int, default=20)
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--n_students", type=int, default=0,
+                        help="Limit to first N students (0 = all)")
     args = parser.parse_args()
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    result_folder = f"results/{args.course_name}_s{args.seed}_D{args.D}_PL{args.PL}_{args.fitting_method}_kernel{args.kernel}_ls{args.length_scale}"
+    n_stu_tag = f"_n{args.n_students}" if args.n_students > 0 else ""
+    result_folder = f"results/{args.course_name}_s{args.seed}_D{args.D}_PL{args.PL}_{args.fitting_method}_kernel{args.kernel}_ls{args.length_scale}{n_stu_tag}"
     ensure_dir(result_folder)
 
     # Download and load data
@@ -133,6 +137,9 @@ if __name__ == "__main__":
     if args.smoke:
         response_matrix = response_matrix[:2]
         response_time_matrix = response_time_matrix[:2]
+    elif args.n_students > 0:
+        response_matrix = response_matrix[:args.n_students]
+        response_time_matrix = response_time_matrix[:args.n_students]
 
     # Preprocess data
     if os.path.exists(f"{result_folder}/all_indexes.pkl"):

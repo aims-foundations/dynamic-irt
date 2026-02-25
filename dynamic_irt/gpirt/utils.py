@@ -155,9 +155,11 @@ def preprocess(
 
         question_observation_indexes = []
         for qidx in tqdm(range(n_questions), desc="Constructing question indexes"):
-            question_observation_indexes.append(
-                torch.where(question_expanding_indexes == qidx)[0][0].item()
-            )
+            matches = torch.where(question_expanding_indexes == qidx)[0]
+            if len(matches) > 0:
+                question_observation_indexes.append(matches[0].item())
+            else:
+                question_observation_indexes.append(-1)
         question_observation_indexes = torch.tensor(
             question_observation_indexes, device="cpu"
         )
