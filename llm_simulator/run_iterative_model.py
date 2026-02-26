@@ -173,12 +173,12 @@ class VLLMRunner(_BaseLLMRunner):
 
 
 MODEL_REGISTRY: Dict[str, callable] = {
-    "claude-sonnet-4":  lambda: ClaudeRunner("claude-sonnet-4-20250514"),
-    "gpt-4.1-nano":     lambda: OpenAIRunner("gpt-4.1-nano"),
-    "gemini-2.0-flash": lambda: GeminiRunner("gemini-2.0-flash"),
-    "mistral-large":    lambda: MistralRunner("mistral-large-latest"),
+    "claude-sonnet-4":  lambda **_kw: ClaudeRunner("claude-sonnet-4-20250514"),
+    "gpt-4.1-nano":     lambda **_kw: OpenAIRunner("gpt-4.1-nano"),
+    "gemini-2.0-flash": lambda **_kw: GeminiRunner("gemini-2.0-flash"),
+    "mistral-large":    lambda **_kw: MistralRunner("mistral-large-latest"),
     # Open-source models (served via vLLM on local GPUs)
-    "glm":              lambda: VLLMRunner("QuantTrio/GLM-4.7-AWQ", tensor_parallel_size=4),
+    "glm":              lambda tp=2, **_kw: VLLMRunner("QuantTrio/GLM-4.7-AWQ", tensor_parallel_size=tp),
 }
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -481,6 +481,10 @@ def main():
         "--output_dir", default="data/iterative_results",
         help="Directory for output CSVs (default: data/iterative_results/)",
     )
+    parser.add_argument(
+        "--tp", type=int, default=2,
+        help="Tensor-parallel size for vLLM models (default: 2)",
+    )
     args = parser.parse_args()
 
     # ── Load scenario data ───────────────────────────────────────────────────
@@ -525,7 +529,7 @@ def main():
 
     for model_id in args.models:
         try:
-            runner = MODEL_REGISTRY[model_id]()
+            runner = MODEL_REGISTRY[model_id](tp=args.tp)
         except Exception as e:
             logger.error("Could not initialise runner for %s: %s", model_id, e)
             continue

@@ -22,7 +22,7 @@ import seaborn as sns
 import torch
 from tqdm import tqdm
 from huggingface_hub import snapshot_download
-from ess import GibbsESSampler
+from ess.src.ess import GibbsESSampler
 from tueplots import bundles, figsizes
 from utils import ensure_dir, preprocess, set_seed
 
@@ -136,6 +136,169 @@ class GPIRTModelAdapter:
         return torch.distributions.Bernoulli(logits=logit).log_prob(resp).sum()
 
 
+class GPIRTTestletModelAdapter(GPIRTModelAdapter):
+    """Extends GPIRT with per-(student, question) testlet effects γ_{sj}.
+
+    Generative model:
+        θ_s ~ GP(0, K)
+        σ²_j = 1  (fixed; avoids MCEM degeneracy)
+        γ_{sj} ~ N(0, σ²_j)
+        z_{jk} ~ N(0, 1)
+        y_{sjk} ~ Bernoulli(sigmoid(θ_s(t) + γ_{sj} + z_{jk}))
+    """
+
+    def __init__(self, response_matrix, all_indexes, device, item_to_question):
+        super().__init__(response_matrix, all_indexes, device)
+
+        # item_to_question: (n_items,) int tensor, values in [0, n_actual_questions)
+        self.item_to_question = item_to_question.to(device)
+        self.n_actual_questions = int(item_to_question.max().item()) + 1
+
+        # Per-observation question index (actual question, not item)
+        self.obs_to_question = self.item_to_question[
+            self.question_expanding_indexes.to(device)
+        ]
+
+        # Per-observation student index
+        obs_to_student = torch.zeros(
+            self.response_data.shape[0], dtype=torch.long, device=device
+        )
+        for s, (start, end) in enumerate(self.student_obs_slices):
+            obs_to_student[start:end] = s
+        self.obs_to_student = obs_to_student
+
+        # Testlet parameters (initialized at 0 / 1)
+        self.gamma = torch.zeros(
+            self.n_students, self.n_actual_questions, device=device
+        )
+        self.sigma2 = torch.ones(self.n_actual_questions, device=device)
+
+        # --- Precompute per-question item/observation indices for blocked
+        #     difficulty ESS (230 blocks of ~10 dims each) ---
+        self.question_item_indices = []   # question_item_indices[q] = item indices
+        self.question_obs_indices = []    # question_obs_indices[q] = obs indices
+        for q in range(self.n_actual_questions):
+            items = (self.item_to_question == q).nonzero(as_tuple=True)[0]
+            self.question_item_indices.append(items)
+            if len(items) > 0:
+                obs_mask = torch.isin(self.question_expanding_indexes, items)
+                self.question_obs_indices.append(
+                    obs_mask.nonzero(as_tuple=True)[0])
+            else:
+                self.question_obs_indices.append(
+                    torch.tensor([], dtype=torch.long, device=device))
+
+        # Global map: item → local index within its question (for fast LL)
+        self.item_local_idx = torch.zeros(
+            self.n_questions, dtype=torch.long, device=device)
+        for q in range(self.n_actual_questions):
+            items = self.question_item_indices[q]
+            for local, item in enumerate(items):
+                self.item_local_idx[item] = local
+
+    def sample_gamma_prior(self):
+        """Sample γ ~ N(0, σ²_j) for all (student, question) pairs."""
+        std = self.sigma2.sqrt()  # (n_actual_questions,)
+        return torch.randn(
+            self.n_students, self.n_actual_questions, device=self.device
+        ) * std.unsqueeze(0)
+
+    def sample_student_gamma_prior(self, s):
+        """Sample γ_s ~ N(0, σ²_j) for a single student (n_actual_questions,)."""
+        std = self.sigma2.sqrt()
+        return torch.randn(self.n_actual_questions, device=self.device) * std
+
+    def student_gamma_log_likelihood(self, s, gamma_s, ability_s, difficulty):
+        """Log-likelihood for student s given their gamma vector.
+
+        Args:
+            s: Student index.
+            gamma_s: (n_actual_questions,) gamma vector for student s.
+            ability_s: (n_timepoints_s,) ability vector for student s.
+            difficulty: (n_questions,) full difficulty vector.
+        """
+        obs_start, obs_end = self.student_obs_slices[s]
+        time_idx = self.time_indexes_device[s]
+        q_idx = self.question_expanding_indexes[obs_start:obs_end]
+        tq_idx = self.obs_to_question[obs_start:obs_end]
+        resp = self.response_data[obs_start:obs_end]
+
+        logit = ability_s[time_idx] + difficulty[q_idx] + gamma_s[tq_idx]
+        return torch.distributions.Bernoulli(logits=logit).log_prob(resp).sum()
+
+    def assemble_abilities_at_obs(self, student_abilities):
+        """Map per-student ability vectors to observation-level abilities."""
+        parts = []
+        for s, (start, end) in enumerate(self.student_obs_slices):
+            parts.append(student_abilities[s][self.time_indexes_device[s]])
+        return torch.cat(parts)
+
+    def assemble_gamma_at_obs(self):
+        """Map gamma matrix to observation-level gamma values."""
+        return self.gamma[self.obs_to_student, self.obs_to_question]
+
+    def question_difficulty_log_likelihood(self, q, diff_q,
+                                           abilities_at_obs, gamma_at_obs):
+        """Log-likelihood for observations involving question q's items.
+
+        Only sums over observations that use items belonging to question q,
+        so this is efficient for per-question blocked difficulty ESS.
+
+        Args:
+            q: Question index.
+            diff_q: (n_items_in_q,) proposed difficulty for items in question q.
+            abilities_at_obs: (n_obs,) precomputed ability at each observation.
+            gamma_at_obs: (n_obs,) precomputed gamma at each observation.
+        """
+        obs_idx = self.question_obs_indices[q]
+        if len(obs_idx) == 0:
+            return torch.tensor(0.0, device=self.device)
+
+        resp = self.response_data[obs_idx]
+        ab = abilities_at_obs[obs_idx]
+        gam = gamma_at_obs[obs_idx]
+
+        # Map observation item indices → local index within diff_q
+        q_idx = self.question_expanding_indexes[obs_idx]
+        local_idx = self.item_local_idx[q_idx]
+        diff_at_obs = diff_q[local_idx]
+
+        logit = ab + diff_at_obs + gam
+        return torch.distributions.Bernoulli(logits=logit).log_prob(resp).sum()
+
+    def log_likelihood(self, ability, difficulty, gamma=None):
+        """Total Bernoulli log-likelihood including testlet effects."""
+        if gamma is None:
+            gamma = self.gamma
+        diff_expanded = difficulty[self.question_expanding_indexes]
+        gamma_expanded = gamma[self.obs_to_student, self.obs_to_question]
+
+        abilities_at_obs = []
+        offset = 0
+        for seg_size, time_idx in zip(self.segment_sizes, self.time_indexes_device):
+            abilities_at_obs.append(ability[offset:offset + seg_size][time_idx])
+            offset += seg_size
+        abilities_at_obs = torch.cat(abilities_at_obs)
+
+        logit = abilities_at_obs + diff_expanded + gamma_expanded
+        return torch.distributions.Bernoulli(logits=logit).log_prob(
+            self.response_data
+        ).sum()
+
+    def student_log_likelihood(self, s, student_ability, difficulty, gamma=None):
+        """Per-student log-likelihood including testlet effects."""
+        if gamma is None:
+            gamma = self.gamma
+        obs_start, obs_end = self.student_obs_slices[s]
+        time_idx = self.time_indexes_device[s]
+        q_idx = self.question_expanding_indexes[obs_start:obs_end]
+        tq_idx = self.obs_to_question[obs_start:obs_end]
+        resp = self.response_data[obs_start:obs_end]
+
+        logit = student_ability[time_idx] + difficulty[q_idx] + gamma[s, tq_idx]
+        return torch.distributions.Bernoulli(logits=logit).log_prob(resp).sum()
+
+
 class BlockedGibbsESSampler:
     """Blocked Gibbs ESS sampler with per-student ability updates.
 
@@ -155,6 +318,7 @@ class BlockedGibbsESSampler:
         self.student_abilities = [None] * model.n_students
         self.difficulties = None
         self.log_likelihood = torch.tensor(0.0)
+        self._is_testlet = isinstance(model, GPIRTTestletModelAdapter)
 
     def _ess_step(self, current, nu, log_lik_fn):
         """Core ESS angle-drawing logic.
@@ -203,6 +367,7 @@ class BlockedGibbsESSampler:
         """
         list_ability = []
         list_difficulty = []
+        list_gamma = []
         start_iter = 0
 
         # --- Resume from checkpoint if available ---
@@ -216,6 +381,11 @@ class BlockedGibbsESSampler:
                     a.to(self.device) for a in ckpt["student_abilities"]
                 ]
                 self.difficulties = ckpt["difficulties"].to(self.device)
+                if self._is_testlet and "gamma" in ckpt:
+                    self.model.gamma = ckpt["gamma"].to(self.device)
+                    self.model.sigma2 = ckpt["sigma2"].to(self.device)
+                if self._is_testlet and "gamma_chain" in ckpt:
+                    list_gamma = list(ckpt["gamma_chain"])
                 start_iter = ckpt["iteration"]
                 print(f"Resumed from checkpoint at iteration {start_iter}")
 
@@ -225,29 +395,43 @@ class BlockedGibbsESSampler:
             # Concatenate per-student abilities for storage
             list_ability.append(torch.cat(self.student_abilities).cpu())
             list_difficulty.append(self.difficulties.cpu())
+            if self._is_testlet:
+                list_gamma.append(self.model.gamma.cpu())
             pbar.set_postfix({"llh": self.log_likelihood.item()})
 
             # --- Periodic checkpoint ---
             if (checkpoint_dir is not None
                     and (i + 1) % checkpoint_every == 0):
-                torch.save({
+                ckpt_data = {
                     "iteration": i + 1,
                     "ability_chain": torch.stack(list_ability),
                     "difficulty_chain": torch.stack(list_difficulty),
                     "student_abilities": [a.cpu() for a in self.student_abilities],
                     "difficulties": self.difficulties.cpu(),
-                }, os.path.join(checkpoint_dir, "checkpoint.pt"))
+                }
+                if self._is_testlet:
+                    ckpt_data["gamma"] = self.model.gamma.cpu()
+                    ckpt_data["sigma2"] = self.model.sigma2.cpu()
+                    ckpt_data["gamma_chain"] = torch.stack(list_gamma)
+                torch.save(ckpt_data, os.path.join(checkpoint_dir, "checkpoint.pt"))
 
         # Save final checkpoint (so a future --resume sees completion)
         if checkpoint_dir is not None:
-            torch.save({
+            ckpt_data = {
                 "iteration": n,
                 "ability_chain": torch.stack(list_ability),
                 "difficulty_chain": torch.stack(list_difficulty),
                 "student_abilities": [a.cpu() for a in self.student_abilities],
                 "difficulties": self.difficulties.cpu(),
-            }, os.path.join(checkpoint_dir, "checkpoint.pt"))
+            }
+            if self._is_testlet:
+                ckpt_data["gamma"] = self.model.gamma.cpu()
+                ckpt_data["sigma2"] = self.model.sigma2.cpu()
+                ckpt_data["gamma_chain"] = torch.stack(list_gamma)
+            torch.save(ckpt_data, os.path.join(checkpoint_dir, "checkpoint.pt"))
 
+        if self._is_testlet:
+            return torch.stack(list_ability), torch.stack(list_difficulty), torch.stack(list_gamma)
         return torch.stack(list_ability), torch.stack(list_difficulty)
 
     def step(self):
@@ -270,16 +454,56 @@ class BlockedGibbsESSampler:
                 self.student_abilities[s], nu_s, student_ll
             )
 
-        # --- Difficulty update: one ESS step for all difficulties ---
-        nu_diff = self.model.sample_item_prior()
-        all_abilities = torch.cat(self.student_abilities)
+        # --- Difficulty update ---
+        if self._is_testlet:
+            # Per-question blocked ESS (~10 dims each, 230 blocks)
+            ab_at_obs = self.model.assemble_abilities_at_obs(
+                self.student_abilities)
+            gam_at_obs = self.model.assemble_gamma_at_obs()
 
-        def diff_ll(diff, _ab=all_abilities):
-            return self.model.log_likelihood(ability=_ab, difficulty=diff)
+            for q in range(self.model.n_actual_questions):
+                item_idx = self.model.question_item_indices[q]
+                if len(item_idx) == 0:
+                    continue
+                nu_q = torch.randn(len(item_idx), device=self.device)
 
-        self.difficulties, self.log_likelihood = self._ess_step(
-            self.difficulties, nu_diff, diff_ll
-        )
+                def diff_q_ll(dq, _q=q, _ab=ab_at_obs, _gam=gam_at_obs):
+                    return self.model.question_difficulty_log_likelihood(
+                        _q, dq, _ab, _gam)
+
+                new_dq, _ = self._ess_step(
+                    self.difficulties[item_idx], nu_q, diff_q_ll)
+                self.difficulties[item_idx] = new_dq
+
+            # Recompute total log-likelihood after all difficulty updates
+            all_abilities = torch.cat(self.student_abilities)
+            self.log_likelihood = self.model.log_likelihood(
+                ability=all_abilities, difficulty=self.difficulties)
+        else:
+            # Base model: one ESS step for all difficulties (unchanged)
+            nu_diff = self.model.sample_item_prior()
+            all_abilities = torch.cat(self.student_abilities)
+
+            def diff_ll(diff, _ab=all_abilities):
+                return self.model.log_likelihood(ability=_ab, difficulty=diff)
+
+            self.difficulties, self.log_likelihood = self._ess_step(
+                self.difficulties, nu_diff, diff_ll
+            )
+
+        # --- Testlet effect update: per-student blocked ESS (230 dims each) ---
+        if self._is_testlet:
+            for s in range(self.model.n_students):
+                nu_gs = self.model.sample_student_gamma_prior(s)
+
+                def gamma_s_ll(gs, _s=s, _ab=self.student_abilities[s],
+                               _diff=self.difficulties):
+                    return self.model.student_gamma_log_likelihood(
+                        _s, gs, _ab, _diff)
+
+                self.model.gamma[s], _ = self._ess_step(
+                    self.model.gamma[s], nu_gs, gamma_s_ll
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -459,7 +683,7 @@ def plot_autocorr(chains_dict, result_dir, max_lag=100):
 
 
 def run_diagnostics(ability_chain, difficulty_chain, segment_sizes,
-                    result_dir, warmup=100):
+                    result_dir, warmup=100, gamma_chain=None):
     """Run full posterior diagnostics and save results.
 
     Args:
@@ -520,12 +744,38 @@ def run_diagnostics(ability_chain, difficulty_chain, segment_sizes,
           f"min={np.nanmin(ess_ab):.1f}, "
           f"pct<100={100*np.nanmean(ess_ab < 100):.1f}%")
 
+    # --- Testlet effect diagnostics ---
+    gamma_diag = []
+    if gamma_chain is not None:
+        posterior_gamma = gamma_chain[warmup:]  # (n_post, n_students, n_actual_questions)
+        n_students_g, n_q_g = posterior_gamma.shape[1], posterior_gamma.shape[2]
+        # Sample 10 random (student, question) pairs for diagnostics
+        rng = np.random.default_rng(0)
+        n_sample = min(10, n_students_g * n_q_g)
+        s_idxs = rng.integers(0, n_students_g, size=n_sample)
+        q_idxs = rng.integers(0, n_q_g, size=n_sample)
+        gamma_sample = posterior_gamma[:, s_idxs, q_idxs]  # (n_post, n_sample)
+        gamma_names = [f"gamma_s{s}_q{q}" for s, q in zip(s_idxs, q_idxs)]
+        gamma_diag = compute_diagnostics(gamma_sample, gamma_names)
+
+        rhats_g = np.array([d["rhat"] for d in gamma_diag])
+        ess_g = np.array([d["ess"] for d in gamma_diag])
+        print(f"\nTestlet effects γ (sample of {n_sample} s×q pairs):")
+        print(f"  R-hat: median={np.nanmedian(rhats_g):.4f}, "
+              f"max={np.nanmax(rhats_g):.4f}, "
+              f"pct>1.1={100*np.nanmean(rhats_g > 1.1):.1f}%")
+        print(f"  ESS:   median={np.nanmedian(ess_g):.1f}, "
+              f"min={np.nanmin(ess_g):.1f}, "
+              f"pct<50={100*np.nanmean(ess_g < 50):.1f}%")
+
     # --- Save summary CSV ---
     summary_rows = []
     for d in diff_diag:
         summary_rows.append({**d, "type": "difficulty"})
     for d in ability_diag:
         summary_rows.append({**d, "type": "ability_mean"})
+    for d in gamma_diag:
+        summary_rows.append({**d, "type": "testlet_effect"})
     summary_df = pd.DataFrame(summary_rows)
     csv_path = os.path.join(result_dir, "diagnostics_summary.csv")
     summary_df.to_csv(csv_path, index=False)
@@ -962,12 +1212,24 @@ if __name__ == "__main__":
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--blocked", action="store_true",
                         help="Use blocked (per-student) ESS for better mixing.")
+    parser.add_argument("--testlet", action="store_true",
+                        help="Use GPIRT-Testlet model with per-(student,question) "
+                             "random effects γ_{sj}. Requires --blocked.")
     args = parser.parse_args()
+
+    if args.testlet and not args.blocked:
+        print("--testlet requires --blocked; enabling --blocked automatically.")
+        args.blocked = True
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    method_tag = "blocked_ess" if args.blocked else "ess"
+    if args.testlet:
+        method_tag = "blocked_ess_testlet"
+    elif args.blocked:
+        method_tag = "blocked_ess"
+    else:
+        method_tag = "ess"
     if args.smoke:
         n_stu_tag = "_smoke"
     elif args.n_students > 0:
@@ -1023,8 +1285,29 @@ if __name__ == "__main__":
             )
         pickle.dump(all_indexes, open(cache_path, "wb"))
 
+    # Build item-to-question mapping (for testlet model)
+    item_to_question = None
+    if args.testlet:
+        itq_cache = f"{result_folder}/item_to_question.pt"
+        if os.path.exists(itq_cache):
+            item_to_question = torch.load(itq_cache, map_location=device)
+            print(f"Loaded item_to_question from cache ({item_to_question.max().item()+1} questions)")
+        else:
+            print("Building item-to-question mapping from CSV...")
+            from utils import build_item_to_question
+            item_to_question = build_item_to_question(args.course_name).to(device)
+            torch.save(item_to_question, itq_cache)
+            print(f"  {item_to_question.shape[0]} items → {item_to_question.max().item()+1} questions")
+
     # Build model adapter and sampler
-    model = GPIRTModelAdapter(response_matrix, all_indexes, device)
+    if args.testlet:
+        model = GPIRTTestletModelAdapter(response_matrix, all_indexes, device, item_to_question)
+        print(f"Using GPIRTTestletModelAdapter "
+              f"({model.n_students} students, {model.n_actual_questions} questions, "
+              f"{model.n_questions} test-case items)")
+    else:
+        model = GPIRTModelAdapter(response_matrix, all_indexes, device)
+
     if args.blocked:
         sampler = BlockedGibbsESSampler(model, device=device)
         print("Using BlockedGibbsESSampler (per-student ability updates)")
@@ -1036,11 +1319,17 @@ if __name__ == "__main__":
     print(f"\nRunning: {args.warmup} warmup + {args.n_samples} posterior samples")
 
     # Draw all samples (warmup + posterior), with checkpointing for resume
-    all_abilities, all_difficulties = sampler.draw(
+    draw_result = sampler.draw(
         n=total_samples,
         checkpoint_dir=result_folder if args.blocked else None,
         checkpoint_every=100,
     )
+
+    if args.testlet:
+        all_abilities, all_difficulties, all_gammas = draw_result
+    else:
+        all_abilities, all_difficulties = draw_result
+        all_gammas = None
 
     # Discard warmup
     ability_samples = all_abilities[args.warmup:]   # (n_samples, total_ability_dim)
@@ -1060,6 +1349,14 @@ if __name__ == "__main__":
     # Save full chain (including warmup) for diagnostics
     torch.save(all_abilities, f"{result_folder}/ability_chain.pt")
     torch.save(all_difficulties, f"{result_folder}/difficulty_chain.pt")
+
+    if args.testlet:
+        gamma_samples = all_gammas[args.warmup:]
+        torch.save(gamma_samples, f"{result_folder}/gamma.pt")
+        torch.save(model.sigma2.cpu(), f"{result_folder}/sigma2.pt")
+        torch.save(all_gammas, f"{result_folder}/gamma_chain.pt")
+        print(f"  gamma.pt: shape {gamma_samples.shape}")
+        print(f"  sigma2.pt: shape {model.sigma2.shape}")
 
     print(f"\nResults saved to {result_folder}/")
     print(f"  ability.pt: {len(ability)} students, {args.n_samples} posterior samples each")
@@ -1083,5 +1380,6 @@ if __name__ == "__main__":
         segment_sizes=model.segment_sizes,
         result_dir=shared_result_dir,
         warmup=args.warmup,
+        gamma_chain=all_gammas.cpu().numpy() if all_gammas is not None else None,
     )
     print("Done.")

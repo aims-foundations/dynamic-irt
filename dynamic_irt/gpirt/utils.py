@@ -4,11 +4,8 @@ import random
 import re
 from datetime import datetime
 
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-import pyro.contrib.gp as gp
-import pyro.distributions as dist
 import torch
 from Levenshtein import distance
 from tqdm import tqdm
@@ -79,30 +76,38 @@ def parse_score(header_text):
         return None
 
 
+def _rbf_kernel(x, lengthscale):
+    """RBF (squared-exponential) kernel. x: (n, 1) double tensor."""
+    diff = x - x.T  # (n, n) via broadcasting
+    return torch.exp(-diff.pow(2) / (2.0 * float(lengthscale) ** 2))
+
+
+def _matern52_kernel(x, lengthscale):
+    """Matern-5/2 kernel. x: (n, 1) double tensor."""
+    r = (x - x.T).abs()  # (n, n)
+    s = (5.0 ** 0.5) * r / float(lengthscale)
+    return (1.0 + s + s.pow(2) / 3.0) * torch.exp(-s)
+
+
 def get_ability_priors_pyro(
     unique_time_vec, kernel, length_scale=1.0, npoints=0, device="cpu"
 ):
     uni_time = unique_time_vec.unsqueeze(-1).double()
     if kernel == "Matern":
-        kernel = gp.kernels.Matern52(
-            input_dim=1, lengthscale=torch.tensor(length_scale)
-        ).double()
+        covar = _matern52_kernel(uni_time, length_scale)
     elif kernel == "RBF":
-        kernel = gp.kernels.RBF(
-            input_dim=1,
-            lengthscale=torch.tensor(length_scale),
-        ).double()
+        covar = _rbf_kernel(uni_time, length_scale)
     else:
         raise ValueError("Invalid kernel type")
 
-    covar = kernel(uni_time) + 1e-4 * torch.eye(
+    covar = covar + 1e-4 * torch.eye(
         uni_time.shape[0],
-        device=device,
+        device=uni_time.device,
         dtype=torch.double,
     )
 
-    return dist.MultivariateNormal(
-        torch.zeros(covar.shape[0], device=device, dtype=torch.double), covar
+    return torch.distributions.MultivariateNormal(
+        torch.zeros(covar.shape[0], device=uni_time.device, dtype=torch.double), covar
     )
 
 
@@ -168,7 +173,7 @@ def preprocess(
         raise NotImplementedError("Work in progress")
 
     if low_rank_configs["type"] == "GP":
-        item_prior_dists = dist.Normal(
+        item_prior_dists = torch.distributions.Normal(
             torch.zeros(n_questions, device=device),
             torch.ones(n_questions, device=device),
         )
@@ -182,6 +187,23 @@ def preprocess(
         ability_prior_dists,
         item_prior_dists,
     )
+
+
+def build_item_to_question(course_name):
+    """Return (n_items,) int tensor mapping each item index to its question index.
+
+    Reads the qidx column from question_infos.csv in the HF dataset
+    (stair-lab/code_insights_matrices), which was stored alongside the
+    correctness_matrix.pt and has exactly n_items rows in item order.
+    """
+    import pandas as pd
+    from huggingface_hub import snapshot_download
+
+    data_folder = snapshot_download(
+        repo_id="stair-lab/code_insights_matrices", repo_type="dataset"
+    )
+    qinfo = pd.read_csv(os.path.join(data_folder, course_name, "question_infos.csv"))
+    return torch.tensor(qinfo["qidx"].values, dtype=torch.long)
 
 
 def find_global_max(repo_id, course_name, class_name):

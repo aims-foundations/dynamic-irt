@@ -1,10 +1,8 @@
 """
-Elo-based IRT experiments for CodeInsights dataset (D1 human data).
+Elo-based IRT for CodeInsights dataset (D1 human data).
 
-Runs three Elo rating model experiments:
-1. Basic Elo — standard theta & difficulty update
-2. Forgetting Elo — time-decay aware update
-3. New-Attempt Elo — distinguishes first vs. repeated item attempts
+Runs a standard Elo rating model that jointly updates student ability (theta)
+and item difficulty (b) after each interaction.
 
 Data is loaded from HuggingFace (stair-lab/code_insights_csv).
 Results are saved to CodeInsights/results/elo/.
@@ -25,7 +23,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from huggingface_hub import login, snapshot_download
-from sklearn.metrics import roc_auc_score, accuracy_score, f1_score
+from sklearn.metrics import roc_auc_score
 from tueplots import bundles, figsizes
 
 matplotlib.use("Agg")
@@ -57,15 +55,6 @@ def basic_update(th, b, day, resp, K=0.4):
     return th + K * (resp - p), b - K * (resp - p)
 
 
-def update_with_time(th, b, day, resp, K=0.4):
-    """Elo update with time-based forgetting (longer gaps -> more uncertainty)."""
-    p = 1 / (1 + np.exp(-(th - b)))
-    prob_coefficient = 1 / (day + 1)
-    return th + K * (
-        resp - (prob_coefficient * p + (1 - prob_coefficient) * 0.5)
-    ), b - K * (resp - p)
-
-
 def run_update(data, update_func, K=0.4, update_difficulty=False):
     """Run sequential Elo updates across all student interactions."""
     last_student, last_theta, last_difficulty = None, None, None
@@ -94,44 +83,6 @@ def run_update(data, update_func, K=0.4, update_difficulty=False):
     return data
 
 
-def run_update_with_new_attempt(data, item_column, K=0.4, update_difficulty=False):
-    """Run Elo updates that distinguish first vs. repeated item attempts."""
-    last_student, last_theta, last_difficulty = None, None, None
-    theta_updated, difficulty_updated, attempted_items = [], [], []
-    for idx, row in data.iterrows():
-        if row["StudentID_SF"] != last_student:
-            last_theta = row["Base_Theta"]
-            last_difficulty = row["Base_Difficulty"] if update_difficulty else None
-            last_student = row["StudentID_SF"]
-            attempted_items = []
-        else:
-            if not pd.isna(row["ItemScore"]):
-                if row[item_column] not in attempted_items:
-                    w = 0
-                    attempted_items.append(row[item_column])
-                else:
-                    w = 1
-                if update_difficulty:
-                    p = 1 / (1 + np.exp(-(last_theta - last_difficulty)))
-                    last_theta = last_theta + K * (
-                        row["ItemScore"] - (w * p + (1 - w) * 0.5)
-                    )
-                    last_difficulty = last_difficulty - K * (row["ItemScore"] - p)
-                else:
-                    p = 1 / (1 + np.exp(-(last_theta - row["RaschLogit"])))
-                    last_theta = last_theta + K * (
-                        row["ItemScore"] - (w * p + (1 - w) * 0.5)
-                    )
-                    last_difficulty = row["RaschLogit"] - K * (row["ItemScore"] - p)
-        theta_updated.append(last_theta)
-        if update_difficulty:
-            difficulty_updated.append(last_difficulty)
-    data["ThetaUpdated"] = theta_updated
-    if update_difficulty:
-        data["DifficultyUpdated"] = difficulty_updated
-    return data
-
-
 def compute_difficulty(group, split_num):
     """Compute average Elo-estimated difficulty from the last 1/split_num of updates."""
     group = group.sort_values("T")
@@ -143,12 +94,11 @@ def compute_difficulty(group, split_num):
     return np.mean(remaining)
 
 
-def calculate_auc(raw_data, data, columns, difficulty_column):
-    """Calculate AUC, accuracy, F1, and RMSE on the masked held-out data.
+def evaluate(raw_data, data, columns, difficulty_column):
+    """Calculate AUC and RMSE on the masked held-out data.
 
-    ItemScore is a fraction [0, 1]. For classification metrics (AUC, accuracy, F1),
-    scores are binarized at threshold=1.0 (all tests pass = success).
-    RMSE is computed on the raw fractions.
+    AUC is computed on binarized scores (all tests pass = success).
+    RMSE is computed on the raw fractional scores.
     """
     original_data = raw_data[columns].copy()
     original_data = original_data.sort_values(["StudentID_SF", "T"]).reset_index(
@@ -173,18 +123,12 @@ def calculate_auc(raw_data, data, columns, difficulty_column):
 
     rmse = np.sqrt(np.mean((masked_data["OriginalScore"] - masked_data["PredictedProb"]) ** 2))
 
-    # Binarize for classification metrics: all-pass (1.0) = success
     binary_true = (masked_data["OriginalScore"] >= 1.0).astype(int)
-    binary_pred = (masked_data["PredictedProb"] >= 0.5).astype(int)
-
     auc = roc_auc_score(binary_true, masked_data["PredictedProb"])
-    acc = accuracy_score(binary_true, binary_pred)
-    f1 = f1_score(binary_true, binary_pred)
 
-    print(f"Out-of-Sample Metrics (difficulty={difficulty_column}):")
-    print(f"  AUC: {auc:.4f}  Accuracy: {acc:.4f}  F1: {f1:.4f}  RMSE: {rmse:.4f}  N: {len(masked_data)}")
+    print(f"Out-of-Sample:  AUC: {auc:.4f}  RMSE: {rmse:.4f}  N: {len(masked_data)}")
 
-    return {"auc": auc, "accuracy": acc, "f1": f1, "rmse": rmse, "n_masked": len(masked_data)}
+    return {"auc": auc, "rmse": rmse, "n_masked": len(masked_data)}
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +199,7 @@ def load_data():
         "student_id": "StudentID_SF",
         "question_unittest_id": "ItemID_SF",
     })
+
     data["day"] = data["time_since_last_attempt"] // 86400
 
     return data
@@ -358,14 +303,9 @@ def visualize(fit_data, result_dir, prefix):
     plot_param_hist(final_theta, r"$\theta$", f"{prefix}theta", result_dir,
                     r"$\theta$ (Final Ability)")
 
-    final_diff = fit_data.groupby("ItemID_SF")["DifficultyUpdated"].last().values
-    plot_param_hist(final_diff, r"$b$", f"{prefix}difficulty", result_dir,
+    avg_diff = fit_data.groupby("ItemID_SF")["AverageDifficulty"].first().dropna().values
+    plot_param_hist(avg_diff, r"$b$", f"{prefix}difficulty", result_dir,
                     r"$b$ (Item Difficulty)", bins=50, pct_clip=(2, 98))
-
-    if "AverageDifficulty" in fit_data.columns:
-        avg_diff = fit_data.groupby("ItemID_SF")["AverageDifficulty"].first().dropna().values
-        plot_param_hist(avg_diff, r"$\bar{b}$", f"{prefix}avg_difficulty", result_dir,
-                        r"$\bar{b}$ (Average Difficulty)", bins=50, pct_clip=(2, 98))
 
     plot_trajectories(fit_data, result_dir, prefix)
 
@@ -430,10 +370,10 @@ if __name__ == "__main__":
     all_metrics = {}
 
     # ------------------------------------------------------------------
-    # Experiment 1: Basic Elo
+    # Elo: joint theta & difficulty update
     # ------------------------------------------------------------------
     print("=" * 60)
-    print("Experiment 1: Basic Elo (Theta & Difficulty)")
+    print("Basic Elo (Theta & Difficulty)")
     print("=" * 60)
     t0 = time.time()
 
@@ -450,79 +390,11 @@ if __name__ == "__main__":
     )
     ci_fit_data["AverageDifficulty"] = ci_fit_data["ItemID_SF"].map(ci_av_diff)
 
-    m_diff = calculate_auc(ci_data, ci_fit_data, ci_cols, "DifficultyUpdated")
-    m_avg = calculate_auc(ci_data, ci_fit_data, ci_cols, "AverageDifficulty")
-    all_metrics["exp1_basic"] = {
-        "difficulty_updated": m_diff, "average_difficulty": m_avg,
-        "time_seconds": round(time.time() - t0, 1),
-    }
-    save_estimates(ci_fit_data, output_dir, "exp1_basic")
+    metrics = evaluate(ci_data, ci_fit_data, ci_cols, "AverageDifficulty")
+    metrics["time_seconds"] = round(time.time() - t0, 1)
+    all_metrics["basic_elo"] = metrics
+    save_estimates(ci_fit_data, output_dir, "elo")
     print()
-
-    # ------------------------------------------------------------------
-    # Experiment 2: Forgetting Elo
-    # ------------------------------------------------------------------
-    print("=" * 60)
-    print("Experiment 2: Forgetting Elo (time decay)")
-    print("=" * 60)
-    random.seed(seed)
-    np.random.seed(seed)
-    t0 = time.time()
-
-    ci_forget = ci_data[ci_cols].copy()
-    ci_forget["Base_Theta"] = 0
-    ci_forget["Base_Difficulty"] = 0
-    ci_forget = ci_forget.sort_values(["StudentID_SF", "T"]).reset_index(drop=True)
-    ci_forget = mask_responses(ci_forget, mask_fraction=mask_fraction)
-    ci_forget["ThetaUpdated"] = np.nan
-    ci_forget["DifficultyUpdated"] = np.nan
-    ci_forget = run_update(ci_forget, update_with_time, K=K, update_difficulty=True)
-    ci_av_diff = ci_forget.groupby("ItemID_SF").apply(
-        compute_difficulty, split_num=5, include_groups=False
-    )
-    ci_forget["AverageDifficulty"] = ci_forget["ItemID_SF"].map(ci_av_diff)
-
-    m_diff = calculate_auc(ci_data, ci_forget, ci_cols, "DifficultyUpdated")
-    m_avg = calculate_auc(ci_data, ci_forget, ci_cols, "AverageDifficulty")
-    all_metrics["exp2_forgetting"] = {
-        "difficulty_updated": m_diff, "average_difficulty": m_avg,
-        "time_seconds": round(time.time() - t0, 1),
-    }
-    save_estimates(ci_forget, output_dir, "exp2_forgetting")
-    print()
-
-    # ------------------------------------------------------------------
-    # Experiment 3: New-Attempt Elo
-    # ------------------------------------------------------------------
-    print("=" * 60)
-    print("Experiment 3: New-Attempt Elo (repeated items)")
-    print("=" * 60)
-    random.seed(seed)
-    np.random.seed(seed)
-    t0 = time.time()
-
-    ci_attempt = ci_data[ci_cols].copy()
-    ci_attempt["Base_Theta"] = 0
-    ci_attempt["Base_Difficulty"] = 0
-    ci_attempt = ci_attempt.sort_values(["StudentID_SF", "T"]).reset_index(drop=True)
-    ci_attempt = mask_responses(ci_attempt, mask_fraction=mask_fraction)
-    ci_attempt["ThetaUpdated"] = np.nan
-    ci_attempt["DifficultyUpdated"] = np.nan
-    ci_attempt = run_update_with_new_attempt(
-        ci_attempt, "ItemID_SF", K=K, update_difficulty=True
-    )
-    ci_av_diff = ci_attempt.groupby("ItemID_SF").apply(
-        compute_difficulty, split_num=5, include_groups=False
-    )
-    ci_attempt["AverageDifficulty"] = ci_attempt["ItemID_SF"].map(ci_av_diff)
-
-    m_diff = calculate_auc(ci_data, ci_attempt, ci_cols, "DifficultyUpdated")
-    m_avg = calculate_auc(ci_data, ci_attempt, ci_cols, "AverageDifficulty")
-    all_metrics["exp3_new_attempt"] = {
-        "difficulty_updated": m_diff, "average_difficulty": m_avg,
-        "time_seconds": round(time.time() - t0, 1),
-    }
-    save_estimates(ci_attempt, output_dir, "exp3_new_attempt")
 
     # ------------------------------------------------------------------
     # Save metrics
@@ -545,30 +417,15 @@ if __name__ == "__main__":
     # Visualize
     # ------------------------------------------------------------------
     print("\nGenerating plots...")
-    visualize(ci_fit_data, output_dir, "exp1_basic_")
-    visualize(ci_forget, output_dir, "exp2_forgetting_")
-    visualize(ci_attempt, output_dir, "exp3_new_attempt_")
+    visualize(ci_fit_data, output_dir, "elo_")
 
     # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
+    m = all_metrics["basic_elo"]
     print(f"\n{'='*60}")
     print("SUMMARY")
     print("=" * 60)
-    header = (
-        f"{'Experiment':<25} {'AUC(Diff)':>10} {'AUC(AvgDiff)':>12} "
-        f"{'Accuracy':>10} {'F1':>8} {'RMSE':>8} {'Time(s)':>8}"
-    )
-    print(header)
-    print("-" * len(header))
-    for name, m in all_metrics.items():
-        if name == "data_summary":
-            continue
-        d = m["difficulty_updated"]
-        a = m["average_difficulty"]
-        print(
-            f"{name:<25} {d['auc']:>10.4f} {a['auc']:>12.4f} "
-            f"{d['accuracy']:>10.4f} {d['f1']:>8.4f} {d['rmse']:>8.4f} {m['time_seconds']:>8.1f}"
-        )
+    print(f"  AUC: {m['auc']:.4f}  RMSE: {m['rmse']:.4f}  Time: {m['time_seconds']:.1f}s")
     print(f"\nResults saved to: {output_dir}/")
     print("=" * 60)

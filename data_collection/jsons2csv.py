@@ -219,6 +219,45 @@ if __name__ == "__main__":
                             data_dict["response"].append(response)
                             data_dict["pass"].append(is_pass)
 
+    # ------------------------------------------------------------------
+    # Deduplicate items with identical unit tests.
+    # The name-based dedup above only catches exact name matches, but
+    # the same problem often appears under different names across
+    # semesters / sections (e.g. "01-Binary search" vs "Binary search").
+    # Here we find groups with byte-identical question_unittests and
+    # remap them to the lowest question_id in each group.
+    # ------------------------------------------------------------------
+    unittest_to_ids = {}
+    for qid, ut in zip(question_infos["question_id"], question_infos["question_unittests"]):
+        unittest_to_ids.setdefault(ut, []).append(qid)
+
+    dedup_map = {}  # old_id -> canonical_id
+    for ut, ids in unittest_to_ids.items():
+        if len(ids) > 1:
+            canonical = min(ids)
+            for qid in ids:
+                if qid != canonical:
+                    dedup_map[qid] = canonical
+
+    if dedup_map:
+        # Remap question_unittest_id in main data
+        data_dict["question_unittest_id"] = [
+            dedup_map.get(qid, qid)
+            for qid in data_dict["question_unittest_id"]
+        ]
+        # Remove duplicate rows from question_infos
+        keep = [
+            i for i, qid in enumerate(question_infos["question_id"])
+            if qid not in dedup_map
+        ]
+        for key in question_infos:
+            question_infos[key] = [question_infos[key][i] for i in keep]
+        print(
+            f"Item dedup: merged {len(dedup_map)} duplicate IDs into "
+            f"{len(dedup_map) - len(set(dedup_map.values()))} canonical items "
+            f"({len(question_infos['question_id'])} unique items remain)"
+        )
+
     upload_api = HfApi()
     os.makedirs("results", exist_ok=True)
     print("Uploading files...")

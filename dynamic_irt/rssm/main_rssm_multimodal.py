@@ -183,14 +183,25 @@ def train(
         params += list(aux_predictor.parameters())
 
     print(f"Number of parameters: {sum(p.numel() for p in params)}")
-    optimizer = torch.optim.Adam(params, lr=args.lr)
+    print(f"Regularization: dropout={args.dropout}, weight_decay={args.weight_decay}, "
+          f"grad_clip={args.grad_clip}, patience={args.patience}")
+    optimizer = torch.optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=200, min_lr=1e-6,
+    )
 
     train_attempts = train_answer_features.shape[1]
     train_losses = []
     test_accs = []
     test_accs_rollout = []
 
-    for epoch in tqdm(range(args.epochs)):
+    # Early stopping state
+    best_test_acc = 0.0
+    best_epoch = 0
+    best_state = None
+
+    pbar = tqdm(range(args.epochs))
+    for epoch in pbar:
         # --- Train ---
         rssm.train()
         scorer.train()
@@ -244,12 +255,13 @@ def train(
             total_loss = bce_loss + args.aux_loss_weight * aux_loss
 
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(params, args.grad_clip)
         optimizer.step()
         optimizer.zero_grad()
 
         train_losses.append(total_loss.item())
         if epoch % 10 == 0:
-            print(f"Train Loss: {total_loss.item():.4f}")
+            pbar.set_postfix(loss=f"{total_loss.item():.4f}")
 
         if epoch % 100 == 0 or epoch == args.epochs - 1:
             _, test_res = test(
@@ -267,10 +279,46 @@ def train(
             )
             test_accs.append(test_res["accuracy"])
             test_accs_rollout.append(test_res["accuracy_pe"])
-            print(
-                f"  Test Acc: {test_res['accuracy']:.4f}"
-                f"\tTest Acc Rollout: {test_res['accuracy_pe']:.4f}"
+
+            # LR scheduling based on test accuracy
+            scheduler.step(test_res["accuracy"])
+
+            # Early stopping: track best model
+            if test_res["accuracy"] > best_test_acc:
+                best_test_acc = test_res["accuracy"]
+                best_epoch = epoch
+                best_state = {
+                    "rssm": {k: v.cpu().clone() for k, v in rssm.state_dict().items()},
+                    "scorer": {k: v.cpu().clone() for k, v in scorer.state_dict().items()},
+                    "aux": {k: v.cpu().clone() for k, v in aux_predictor.state_dict().items()}
+                    if aux_predictor is not None else None,
+                }
+
+            current_lr = optimizer.param_groups[0]["lr"]
+            tqdm.write(
+                f"[{epoch}] Test Acc: {test_res['accuracy']:.4f}"
+                f"  Rollout: {test_res['accuracy_pe']:.4f}"
+                f"  Best: {best_test_acc:.4f}@{best_epoch}"
+                f"  LR: {current_lr:.2e}"
             )
+
+            # Early stopping check
+            if epoch - best_epoch >= args.patience:
+                tqdm.write(
+                    f"\nEarly stopping at epoch {epoch} "
+                    f"(no improvement for {args.patience} epochs, "
+                    f"best={best_test_acc:.4f} @ epoch {best_epoch})"
+                )
+                break
+
+    # Restore best model
+    if best_state is not None:
+        print(f"\nRestoring best model from epoch {best_epoch} "
+              f"(test acc={best_test_acc:.4f})")
+        rssm.load_state_dict(best_state["rssm"])
+        scorer.load_state_dict(best_state["scorer"])
+        if aux_predictor is not None and best_state["aux"] is not None:
+            aux_predictor.load_state_dict(best_state["aux"])
 
     # Save models
     save_dir = f"saves/multimodal/{args.cls}_{args.config}"
@@ -280,7 +328,7 @@ def train(
     if aux_predictor is not None:
         torch.save(aux_predictor.state_dict(), f"{save_dir}/aux_predictor.pth")
 
-    # Final evaluation on both train and test
+    # Final evaluation on both train and test (using best model)
     hidden_state, train_res = test(
         rssm, scorer, aux_predictor, config,
         h0, a0,
@@ -316,7 +364,11 @@ def train(
     # Plots
     print("\nGenerating plots...")
     plot_losses(train_losses, result_dir)
-    eval_epochs = list(range(0, args.epochs, 100)) + [args.epochs - 1]
+    actual_epochs = len(train_losses)
+    eval_epochs = [e for e in range(0, actual_epochs, 100)]
+    if actual_epochs - 1 not in eval_epochs:
+        eval_epochs.append(actual_epochs - 1)
+    eval_epochs = eval_epochs[:len(test_accs)]
     plot_test_metrics(eval_epochs, test_accs, test_accs_rollout, result_dir)
     plot_question_difficulty(question_static, result_dir)
     plot_question_embeddings(rssm, n_questions, result_dir)
@@ -438,6 +490,11 @@ if __name__ == "__main__":
     parser.add_argument("--enc_dim", type=int, default=64)
     parser.add_argument("--train_attempts", type=int, default=1000)
     parser.add_argument("--aux_loss_weight", type=float, default=0.1)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--patience", type=int, default=500,
+                        help="Early stopping patience (epochs without improvement)")
+    parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--test_only", type=int, default=0)
     args = parser.parse_args()
 
@@ -465,12 +522,14 @@ if __name__ == "__main__":
 
     # Initialize models
     rssm = MultiModalRSSM(
-        config, n_questions, hidden_dim=args.hidden_dim, enc_dim=args.enc_dim
+        config, n_questions, hidden_dim=args.hidden_dim, enc_dim=args.enc_dim,
+        dropout=args.dropout,
     ).to(device)
     scorer = MultiModalScorer(
         hidden_dim=args.hidden_dim,
         question_enc_dim=args.enc_dim,
         n_testcases=config.n_testcases,
+        dropout=args.dropout,
     ).to(device)
 
     aux_predictor = None

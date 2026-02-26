@@ -13,13 +13,15 @@ from feature_config import FeatureConfig
 class AnswerEncoder(nn.Module):
     """Encodes concatenated answer feature groups into a fixed-dim representation."""
 
-    def __init__(self, input_dim, hidden_dim=64):
+    def __init__(self, input_dim, hidden_dim=64, dropout=0.0):
         super().__init__()
         self._encoder = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ELU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ELU(),
+            nn.Dropout(dropout),
         )
 
     def forward(self, answer_features):
@@ -29,15 +31,17 @@ class AnswerEncoder(nn.Module):
 class QuestionEncoder(nn.Module):
     """Encodes question features (learnable embedding + static features)."""
 
-    def __init__(self, n_questions, q_emb_dim=16, static_dim=3, hidden_dim=64):
+    def __init__(self, n_questions, q_emb_dim=16, static_dim=3, hidden_dim=64, dropout=0.0):
         super().__init__()
         self.q_embedding = nn.Embedding(n_questions, q_emb_dim)
         total_in = q_emb_dim + static_dim
         self._encoder = nn.Sequential(
             nn.Linear(total_in, hidden_dim),
             nn.ELU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ELU(),
+            nn.Dropout(dropout),
         )
 
     def forward(self, question_ids, question_static_features):
@@ -58,18 +62,20 @@ class MultiModalRSSM(nn.Module):
     feature encoders instead of raw embedding encoders.
     """
 
-    def __init__(self, feature_config, n_questions, hidden_dim=128, enc_dim=64):
+    def __init__(self, feature_config, n_questions, hidden_dim=128, enc_dim=64, dropout=0.0):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.enc_dim = enc_dim
-        self._ans_encoder = AnswerEncoder(feature_config.answer_dim, enc_dim)
+        self._ans_encoder = AnswerEncoder(feature_config.answer_dim, enc_dim, dropout=dropout)
         self._ques_encoder = QuestionEncoder(
             n_questions,
             q_emb_dim=feature_config.question_emb_dim,
             static_dim=feature_config.question_static_dim,
             hidden_dim=enc_dim,
+            dropout=dropout,
         )
         self._cell = nn.GRUCell(enc_dim * 2, hidden_dim)
+        self._dropout = nn.Dropout(dropout)
 
     def forward(self, prev_ans_features, prev_hidden, question_ids, question_static):
         """
@@ -85,7 +91,8 @@ class MultiModalRSSM(nn.Module):
         enc_ans = self._ans_encoder(prev_ans_features)
         enc_ques = self._ques_encoder(question_ids, question_static)
         gru_input = torch.cat([enc_ans, enc_ques], dim=-1)
-        return self._cell(gru_input, prev_hidden)
+        hidden = self._cell(gru_input, prev_hidden)
+        return self._dropout(hidden)
 
     def encode_question(self, question_ids, question_static):
         """Encode question features (for use by scorer)."""
@@ -98,13 +105,15 @@ class MultiModalScorer(nn.Module):
     Replaces the original Scorer which compared answer vs best-answer embeddings.
     """
 
-    def __init__(self, hidden_dim=128, question_enc_dim=64, n_testcases=15):
+    def __init__(self, hidden_dim=128, question_enc_dim=64, n_testcases=15, dropout=0.0):
         super().__init__()
         self._scorer = nn.Sequential(
             nn.Linear(hidden_dim + question_enc_dim, 128),
             nn.ELU(),
+            nn.Dropout(dropout),
             nn.Linear(128, 64),
             nn.ELU(),
+            nn.Dropout(dropout),
         )
         self._predictor = nn.Sequential(
             nn.Linear(64, n_testcases),
