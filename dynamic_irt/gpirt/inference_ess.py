@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 from huggingface_hub import snapshot_download
 from ess.src.ess import GibbsESSampler
@@ -81,6 +82,78 @@ class GPIRTModelAdapter:
             n_obs = time_idx.shape[0]
             self.student_obs_slices.append((obs_offset, obs_offset + n_obs))
             obs_offset += n_obs
+
+        # --- Precomputed tensors for batched ESS ---
+        n_obs = self.response_data.shape[0]
+
+        # obs_to_student: (n_obs,) maps each observation to its student index
+        self.obs_to_student = torch.zeros(n_obs, dtype=torch.long, device=device)
+        for s, (start, end) in enumerate(self.student_obs_slices):
+            self.obs_to_student[start:end] = s
+
+        # ability_offsets: cumulative dims per student in concatenated ability vector
+        self.ability_offsets = [0]
+        for seg_size in self.segment_sizes:
+            self.ability_offsets.append(self.ability_offsets[-1] + seg_size)
+        self.total_ability_dims = self.ability_offsets[-1]
+
+        # obs_to_ability_idx: (n_obs,) maps each obs to index in flat ability vector
+        self.obs_to_ability_idx = torch.empty(n_obs, dtype=torch.long, device=device)
+        for s, (start, end) in enumerate(self.student_obs_slices):
+            self.obs_to_ability_idx[start:end] = (
+                self.ability_offsets[s] + self.time_indexes_device[s]
+            )
+
+        # dim_to_student: (total_ability_dims,) maps each ability dim to its student
+        self.dim_to_student = torch.empty(
+            self.total_ability_dims, dtype=torch.long, device=device
+        )
+        for s, seg_size in enumerate(self.segment_sizes):
+            self.dim_to_student[
+                self.ability_offsets[s]:self.ability_offsets[s + 1]
+            ] = s
+
+        # Pre-extract Cholesky factors on GPU for faster sequential sampling
+        self._cholesky_factors = []
+        for s, prior in enumerate(self.ability_prior_dists):
+            self._cholesky_factors.append(
+                prior._unbroadcasted_scale_tril.to(device)
+            )
+
+    def batched_sample_ability_prior(self):
+        """Sample from all students' GP priors, concatenated flat.
+
+        Uses pre-cached Cholesky factors on GPU for L @ z sampling.
+
+        Returns:
+            (total_ability_dims,) flat vector of prior samples.
+        """
+        samples = []
+        for s in range(self.n_students):
+            L = self._cholesky_factors[s]  # (T_s, T_s) already on GPU
+            z = torch.randn(L.shape[0], 1, dtype=L.dtype, device=self.device)
+            samples.append((L @ z).squeeze(-1))
+        return torch.cat(samples)
+
+    def batched_student_ability_ll(self, abilities_flat, difficulties):
+        """Compute per-student log-likelihoods from a flat ability vector.
+
+        Args:
+            abilities_flat: (total_ability_dims,) concatenated abilities
+            difficulties: (n_items,) difficulty vector
+
+        Returns:
+            (n_students,) per-student log-likelihoods
+        """
+        ab_at_obs = abilities_flat[self.obs_to_ability_idx]
+        diff_at_obs = difficulties[self.question_expanding_indexes]
+        logit = ab_at_obs + diff_at_obs
+        log_probs = self.response_data * logit - F.softplus(logit)
+        student_lls = torch.zeros(
+            self.n_students, dtype=logit.dtype, device=self.device
+        )
+        student_lls.scatter_add_(0, self.obs_to_student, log_probs)
+        return student_lls
 
     def sample_theta_prior(self):
         """Sample abilities from the GP prior for each student, concatenated."""
@@ -159,13 +232,7 @@ class GPIRTTestletModelAdapter(GPIRTModelAdapter):
             self.question_expanding_indexes.to(device)
         ]
 
-        # Per-observation student index
-        obs_to_student = torch.zeros(
-            self.response_data.shape[0], dtype=torch.long, device=device
-        )
-        for s, (start, end) in enumerate(self.student_obs_slices):
-            obs_to_student[start:end] = s
-        self.obs_to_student = obs_to_student
+        # obs_to_student is already built in base class
 
         # Testlet parameters (initialized at 0 / 1)
         self.gamma = torch.zeros(
@@ -207,6 +274,41 @@ class GPIRTTestletModelAdapter(GPIRTModelAdapter):
         """Sample γ_s ~ N(0, σ²_j) for a single student (n_actual_questions,)."""
         std = self.sigma2.sqrt()
         return torch.randn(self.n_actual_questions, device=self.device) * std
+
+    def batched_student_ability_ll(self, abilities_flat, difficulties):
+        """Override base: include gamma in per-student log-likelihoods."""
+        ab_at_obs = abilities_flat[self.obs_to_ability_idx]
+        diff_at_obs = difficulties[self.question_expanding_indexes]
+        gam_at_obs = self.gamma[self.obs_to_student, self.obs_to_question]
+        logit = ab_at_obs + diff_at_obs + gam_at_obs
+        log_probs = self.response_data * logit - F.softplus(logit)
+        student_lls = torch.zeros(
+            self.n_students, dtype=logit.dtype, device=self.device
+        )
+        student_lls.scatter_add_(0, self.obs_to_student, log_probs)
+        return student_lls
+
+    def batched_student_gamma_ll(self, gamma, abilities_flat, difficulties):
+        """Compute per-student log-likelihoods from a gamma matrix.
+
+        Args:
+            gamma: (n_students, n_actual_questions) proposed gamma
+            abilities_flat: (total_ability_dims,) concatenated abilities
+            difficulties: (n_items,) difficulty vector
+
+        Returns:
+            (n_students,) per-student log-likelihoods
+        """
+        ab_at_obs = abilities_flat[self.obs_to_ability_idx]
+        diff_at_obs = difficulties[self.question_expanding_indexes]
+        gam_at_obs = gamma[self.obs_to_student, self.obs_to_question]
+        logit = ab_at_obs + diff_at_obs + gam_at_obs
+        log_probs = self.response_data * logit - F.softplus(logit)
+        student_lls = torch.zeros(
+            self.n_students, dtype=logit.dtype, device=self.device
+        )
+        student_lls.scatter_add_(0, self.obs_to_student, log_probs)
+        return student_lls
 
     def student_gamma_log_likelihood(self, s, gamma_s, ability_s, difficulty):
         """Log-likelihood for student s given their gamma vector.
@@ -355,8 +457,150 @@ class BlockedGibbsESSampler:
                     + angle_min
                 )
 
+    def _batched_ess_ability_step(self, current_flat, nu_flat, batch_ll_fn,
+                                   max_shrink=100):
+        """Batched ESS for ability in the flat concatenated representation.
+
+        All students are updated simultaneously. Each student has ONE angle
+        that rotates its entire ability vector on the ESS ellipse.
+
+        Args:
+            current_flat: (total_ability_dims,) current flat abilities
+            nu_flat: (total_ability_dims,) prior sample
+            batch_ll_fn: callable(flat_abilities) -> (n_students,) per-student LLs
+            max_shrink: maximum bracket shrinking iterations
+
+        Returns:
+            (total_ability_dims,) updated flat abilities
+        """
+        model = self.model
+        B = model.n_students
+        device = self.device
+
+        # Compute current LL for all students — ONE GPU pass
+        ll_cur = batch_ll_fn(current_flat)  # (B,)
+        ll_thres = ll_cur + torch.log(torch.rand(B, device=device))
+
+        # Per-student angles
+        angle = torch.rand(B, device=device) * 2 * np.pi
+        angle_min = angle - 2 * np.pi
+        angle_max = angle.clone()
+
+        active = torch.ones(B, dtype=torch.bool, device=device)
+        result_flat = current_flat.clone()
+        result_lls = ll_cur.clone()
+
+        for _ in range(max_shrink):
+            if not active.any():
+                break
+
+            # Expand per-student angles to per-dimension
+            angle_expanded = angle[model.dim_to_student]  # (total_dims,)
+
+            # Propose candidates for all students
+            candidate_flat = (current_flat * torch.cos(angle_expanded)
+                              + nu_flat * torch.sin(angle_expanded))
+
+            # Evaluate per-student LLs — ONE GPU pass
+            ll_cand = batch_ll_fn(candidate_flat)
+
+            # Accept where LL exceeds threshold and student is still active
+            accepted = active & (ll_cand >= ll_thres)
+
+            if accepted.any():
+                acc_dims = accepted[model.dim_to_student]
+                result_flat[acc_dims] = candidate_flat[acc_dims]
+                result_lls[accepted] = ll_cand[accepted]
+                active[accepted] = False
+
+            # Shrink brackets for still-active students
+            if active.any():
+                neg = active & (angle < 0)
+                pos = active & (angle >= 0)
+                angle_min[neg] = angle[neg]
+                angle_max[pos] = angle[pos]
+
+                # Zero-width bracket — keep current value
+                zero_bracket = active & (angle_min >= angle_max)
+                if zero_bracket.any():
+                    active[zero_bracket] = False
+
+                # New angles for remaining active
+                rem = active
+                if rem.any():
+                    angle[rem] = (
+                        torch.rand(rem.sum(), device=device)
+                        * (angle_max[rem] - angle_min[rem])
+                        + angle_min[rem]
+                    )
+
+        return result_flat, result_lls
+
+    def _batched_ess_gamma_step(self, current_gamma, nu_gamma, batch_ll_fn,
+                                 max_shrink=100):
+        """Batched ESS for gamma (fixed-size per student).
+
+        Args:
+            current_gamma: (n_students, n_actual_questions) current gamma
+            nu_gamma: (n_students, n_actual_questions) prior sample
+            batch_ll_fn: callable(gamma_matrix) -> (n_students,) per-student LLs
+            max_shrink: maximum bracket shrinking iterations
+
+        Returns:
+            (n_students, n_actual_questions) updated gamma
+        """
+        B = current_gamma.shape[0]
+        device = self.device
+
+        ll_cur = batch_ll_fn(current_gamma)
+        ll_thres = ll_cur + torch.log(torch.rand(B, device=device))
+
+        angle = torch.rand(B, device=device) * 2 * np.pi
+        angle_min = angle - 2 * np.pi
+        angle_max = angle.clone()
+
+        active = torch.ones(B, dtype=torch.bool, device=device)
+        result_gamma = current_gamma.clone()
+        result_lls = ll_cur.clone()
+
+        for _ in range(max_shrink):
+            if not active.any():
+                break
+
+            cos_a = torch.cos(angle).unsqueeze(1)  # (B, 1)
+            sin_a = torch.sin(angle).unsqueeze(1)
+            candidate = current_gamma * cos_a + nu_gamma * sin_a
+
+            ll_cand = batch_ll_fn(candidate)
+
+            accepted = active & (ll_cand >= ll_thres)
+            if accepted.any():
+                result_gamma[accepted] = candidate[accepted]
+                result_lls[accepted] = ll_cand[accepted]
+                active[accepted] = False
+
+            if active.any():
+                neg = active & (angle < 0)
+                pos = active & (angle >= 0)
+                angle_min[neg] = angle[neg]
+                angle_max[pos] = angle[pos]
+
+                zero_bracket = active & (angle_min >= angle_max)
+                if zero_bracket.any():
+                    active[zero_bracket] = False
+
+                rem = active
+                if rem.any():
+                    angle[rem] = (
+                        torch.rand(rem.sum(), device=device)
+                        * (angle_max[rem] - angle_min[rem])
+                        + angle_min[rem]
+                    )
+
+        return result_gamma, result_lls
+
     def draw(self, n: int = 1, checkpoint_dir: str = None,
-             checkpoint_every: int = 100):
+             checkpoint_every: int = 100, thin: int = 1):
         """Draw n samples (each is a full Gibbs sweep).
 
         Args:
@@ -364,6 +608,8 @@ class BlockedGibbsESSampler:
             checkpoint_dir: If provided, save partial chains every
                 ``checkpoint_every`` iterations so runs can be resumed.
             checkpoint_every: How often to write a checkpoint (in iterations).
+            thin: Store every ``thin``-th sample in the trace (default 1 = all).
+                Reduces RAM and disk usage for large datasets.
         """
         list_ability = []
         list_difficulty = []
@@ -375,8 +621,9 @@ class BlockedGibbsESSampler:
             ckpt_path = os.path.join(checkpoint_dir, "checkpoint.pt")
             if os.path.exists(ckpt_path):
                 ckpt = torch.load(ckpt_path, map_location=self.device)
-                list_ability = list(ckpt["ability_chain"])
-                list_difficulty = list(ckpt["difficulty_chain"])
+                # Chains are stored/appended as CPU tensors
+                list_ability = [t.cpu() for t in ckpt["ability_chain"]]
+                list_difficulty = [t.cpu() for t in ckpt["difficulty_chain"]]
                 self.student_abilities = [
                     a.to(self.device) for a in ckpt["student_abilities"]
                 ]
@@ -385,18 +632,25 @@ class BlockedGibbsESSampler:
                     self.model.gamma = ckpt["gamma"].to(self.device)
                     self.model.sigma2 = ckpt["sigma2"].to(self.device)
                 if self._is_testlet and "gamma_chain" in ckpt:
-                    list_gamma = list(ckpt["gamma_chain"])
+                    list_gamma = [t.cpu() for t in ckpt["gamma_chain"]]
                 start_iter = ckpt["iteration"]
-                print(f"Resumed from checkpoint at iteration {start_iter}")
+                thin_ckpt = ckpt.get("thin", 1)
+                if thin_ckpt != thin:
+                    print(f"WARNING: checkpoint thin={thin_ckpt} != requested thin={thin}; using {thin}")
+                print(f"Resumed from checkpoint at iteration {start_iter} "
+                      f"({len(list_ability)} stored samples)")
 
         pbar = tqdm(range(start_iter, n), initial=start_iter, total=n)
         for i in pbar:
             self.step()
-            # Concatenate per-student abilities for storage
-            list_ability.append(torch.cat(self.student_abilities).cpu())
-            list_difficulty.append(self.difficulties.cpu())
-            if self._is_testlet:
-                list_gamma.append(self.model.gamma.cpu())
+
+            # Store trace only every `thin` iterations
+            if (i + 1) % thin == 0:
+                list_ability.append(torch.cat(self.student_abilities).cpu())
+                list_difficulty.append(self.difficulties.cpu())
+                if self._is_testlet:
+                    list_gamma.append(self.model.gamma.cpu())
+
             pbar.set_postfix({"llh": self.log_likelihood.item()})
 
             # --- Periodic checkpoint ---
@@ -404,6 +658,7 @@ class BlockedGibbsESSampler:
                     and (i + 1) % checkpoint_every == 0):
                 ckpt_data = {
                     "iteration": i + 1,
+                    "thin": thin,
                     "ability_chain": torch.stack(list_ability),
                     "difficulty_chain": torch.stack(list_difficulty),
                     "student_abilities": [a.cpu() for a in self.student_abilities],
@@ -413,12 +668,15 @@ class BlockedGibbsESSampler:
                     ckpt_data["gamma"] = self.model.gamma.cpu()
                     ckpt_data["sigma2"] = self.model.sigma2.cpu()
                     ckpt_data["gamma_chain"] = torch.stack(list_gamma)
-                torch.save(ckpt_data, os.path.join(checkpoint_dir, "checkpoint.pt"))
+                tmp_path = os.path.join(checkpoint_dir, "checkpoint.pt.tmp")
+                torch.save(ckpt_data, tmp_path)
+                os.replace(tmp_path, os.path.join(checkpoint_dir, "checkpoint.pt"))
 
         # Save final checkpoint (so a future --resume sees completion)
         if checkpoint_dir is not None:
             ckpt_data = {
                 "iteration": n,
+                "thin": thin,
                 "ability_chain": torch.stack(list_ability),
                 "difficulty_chain": torch.stack(list_difficulty),
                 "student_abilities": [a.cpu() for a in self.student_abilities],
@@ -428,14 +686,16 @@ class BlockedGibbsESSampler:
                 ckpt_data["gamma"] = self.model.gamma.cpu()
                 ckpt_data["sigma2"] = self.model.sigma2.cpu()
                 ckpt_data["gamma_chain"] = torch.stack(list_gamma)
-            torch.save(ckpt_data, os.path.join(checkpoint_dir, "checkpoint.pt"))
+            tmp_path = os.path.join(checkpoint_dir, "checkpoint.pt.tmp")
+            torch.save(ckpt_data, tmp_path)
+            os.replace(tmp_path, os.path.join(checkpoint_dir, "checkpoint.pt"))
 
         if self._is_testlet:
             return torch.stack(list_ability), torch.stack(list_difficulty), torch.stack(list_gamma)
         return torch.stack(list_ability), torch.stack(list_difficulty)
 
     def step(self):
-        """One full Gibbs sweep: update each student, then difficulty."""
+        """One full Gibbs sweep: batched ability, per-question difficulty, batched gamma."""
         # Initialize if needed
         if self.student_abilities[0] is None:
             for s in range(self.model.n_students):
@@ -443,23 +703,30 @@ class BlockedGibbsESSampler:
         if self.difficulties is None:
             self.difficulties = self.model.sample_item_prior()
 
-        # --- Blocked ability updates: one ESS step per student ---
+        # --- 1. BATCHED ABILITY UPDATE ---
+        current_flat = torch.cat(self.student_abilities)  # (total_ability_dims,)
+        nu_flat = self.model.batched_sample_ability_prior()  # (total_ability_dims,)
+
+        _diff = self.difficulties
+        def ability_batch_ll(af, _d=_diff):
+            return self.model.batched_student_ability_ll(af, _d)
+
+        updated_flat, _ = self._batched_ess_ability_step(
+            current_flat, nu_flat, ability_batch_ll
+        )
+
+        # Scatter back to per-student list (checkpoint compat)
         for s in range(self.model.n_students):
-            nu_s = self.model.sample_student_prior(s)
+            start = self.model.ability_offsets[s]
+            end = self.model.ability_offsets[s + 1]
+            self.student_abilities[s] = updated_flat[start:end]
 
-            def student_ll(ability_s, _s=s, _diff=self.difficulties):
-                return self.model.student_log_likelihood(_s, ability_s, _diff)
-
-            self.student_abilities[s], _ = self._ess_step(
-                self.student_abilities[s], nu_s, student_ll
-            )
-
-        # --- Difficulty update ---
+        # --- 2. DIFFICULTY UPDATE (per-question, kept sequential) ---
         if self._is_testlet:
-            # Per-question blocked ESS (~10 dims each, 230 blocks)
-            ab_at_obs = self.model.assemble_abilities_at_obs(
-                self.student_abilities)
-            gam_at_obs = self.model.assemble_gamma_at_obs()
+            ab_at_obs = updated_flat[self.model.obs_to_ability_idx]
+            gam_at_obs = self.model.gamma[
+                self.model.obs_to_student, self.model.obs_to_question
+            ]
 
             for q in range(self.model.n_actual_questions):
                 item_idx = self.model.question_item_indices[q]
@@ -475,35 +742,30 @@ class BlockedGibbsESSampler:
                     self.difficulties[item_idx], nu_q, diff_q_ll)
                 self.difficulties[item_idx] = new_dq
 
-            # Recompute total log-likelihood after all difficulty updates
-            all_abilities = torch.cat(self.student_abilities)
             self.log_likelihood = self.model.log_likelihood(
-                ability=all_abilities, difficulty=self.difficulties)
+                ability=updated_flat, difficulty=self.difficulties)
         else:
-            # Base model: one ESS step for all difficulties (unchanged)
             nu_diff = self.model.sample_item_prior()
-            all_abilities = torch.cat(self.student_abilities)
 
-            def diff_ll(diff, _ab=all_abilities):
+            def diff_ll(diff, _ab=updated_flat):
                 return self.model.log_likelihood(ability=_ab, difficulty=diff)
 
             self.difficulties, self.log_likelihood = self._ess_step(
                 self.difficulties, nu_diff, diff_ll
             )
 
-        # --- Testlet effect update: per-student blocked ESS (230 dims each) ---
+        # --- 3. BATCHED GAMMA UPDATE ---
         if self._is_testlet:
-            for s in range(self.model.n_students):
-                nu_gs = self.model.sample_student_gamma_prior(s)
+            nu_gamma = self.model.sample_gamma_prior()  # (n_students, n_questions)
 
-                def gamma_s_ll(gs, _s=s, _ab=self.student_abilities[s],
-                               _diff=self.difficulties):
-                    return self.model.student_gamma_log_likelihood(
-                        _s, gs, _ab, _diff)
+            _ab_flat = updated_flat
+            _d = self.difficulties
+            def gamma_batch_ll(g, _af=_ab_flat, _dd=_d):
+                return self.model.batched_student_gamma_ll(g, _af, _dd)
 
-                self.model.gamma[s], _ = self._ess_step(
-                    self.model.gamma[s], nu_gs, gamma_s_ll
-                )
+            self.model.gamma, _ = self._batched_ess_gamma_step(
+                self.model.gamma, nu_gamma, gamma_batch_ll
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1199,7 +1461,8 @@ def visualize(ability_samples, difficulty_samples, all_abilities, all_difficulti
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GPIRT inference with ESS")
-    parser.add_argument("--course_name", type=str, default="dsa_hk231")
+    parser.add_argument("--course_name", type=str, default="all",
+                        help="Course name or 'all' for combined dataset")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--kernel", type=str, default="RBF")
     parser.add_argument("--length_scale", type=float, default=1.0)
@@ -1209,6 +1472,8 @@ if __name__ == "__main__":
                         help="Number of warmup (burn-in) samples to discard")
     parser.add_argument("--n_students", type=int, default=0,
                         help="Limit to first N students (0 = all)")
+    parser.add_argument("--thin", type=int, default=1,
+                        help="Store every thin-th sample in trace (reduces RAM/disk)")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--blocked", action="store_true",
                         help="Use blocked (per-student) ESS for better mixing.")
@@ -1243,17 +1508,62 @@ if __name__ == "__main__":
     ensure_dir(result_folder)
 
     # Download and load data
-    data_folder = snapshot_download(
-        repo_id="stair-lab/code_insights_matrices", repo_type="dataset"
-    )
-    data_folder = os.path.join(data_folder, args.course_name)
+    if args.course_name == "all":
+        # Build combined matrix from raw CSV (all courses, shared items/students)
+        import pandas as pd
+        import sys
+        sys.path.insert(0, os.path.join(REPO_ROOT, "data_collection"))
+        from csv2matrices import build_matrices
 
-    response_matrix = torch.load(f"{data_folder}/correctness_matrix.pt").to(
-        device, dtype=torch.float32
-    )
-    response_time_matrix = torch.load(f"{data_folder}/time_matrix.pt").to(
-        device, dtype=torch.float32
-    )
+        matrices_cache = f"{result_folder}/matrices_cache.pt"
+        if os.path.exists(matrices_cache):
+            print("Loading cached combined matrices...")
+            cache = torch.load(matrices_cache, map_location="cpu")
+            response_matrix = cache["correctness"].float()
+            response_time_matrix = cache["time"].float()
+            item_to_question_raw = cache["item_to_question"]
+        else:
+            csv_folder = snapshot_download(
+                repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+            )
+            main_data = pd.read_csv(
+                os.path.join(csv_folder, "main_data.csv"), low_memory=False
+            )
+            question_infos = pd.read_csv(
+                os.path.join(csv_folder, "question_infos.csv")
+            )
+            main_data = main_data[
+                main_data["response_type"].isin(["Submit", "Prechecked"])
+            ].copy()
+            main_data = main_data.dropna(subset=["pass"])
+            main_data = main_data[main_data["pass"].astype(str).str.strip() != ""]
+            print(f"Loaded {len(main_data)} submissions across all courses")
+
+            _, question_info_list, correctness, time_mat, _ = build_matrices(
+                main_data, question_infos, "all", "cpu"
+            )
+            # Build item_to_question from question_info_list
+            itq = torch.tensor(
+                [q["qidx"] for q in question_info_list], dtype=torch.long
+            )
+            torch.save(
+                {"correctness": correctness, "time": time_mat,
+                 "item_to_question": itq},
+                matrices_cache,
+            )
+            response_matrix = correctness.float()
+            response_time_matrix = time_mat.float()
+            item_to_question_raw = itq
+    else:
+        # Load pre-built per-course matrices
+        data_folder = snapshot_download(
+            repo_id="stair-lab/code_insights_matrices", repo_type="dataset"
+        )
+        data_folder = os.path.join(data_folder, args.course_name)
+
+        response_matrix = torch.load(f"{data_folder}/correctness_matrix.pt").float()
+        response_time_matrix = torch.load(f"{data_folder}/time_matrix.pt").float()
+        item_to_question_raw = None
 
     if args.smoke:
         response_matrix = response_matrix[:2]
@@ -1289,7 +1599,13 @@ if __name__ == "__main__":
     item_to_question = None
     if args.testlet:
         itq_cache = f"{result_folder}/item_to_question.pt"
-        if os.path.exists(itq_cache):
+        if args.course_name == "all" and item_to_question_raw is not None:
+            # Already built during matrix construction
+            item_to_question = item_to_question_raw.to(device)
+            torch.save(item_to_question, itq_cache)
+            print(f"item_to_question from combined build "
+                  f"({item_to_question.max().item()+1} questions)")
+        elif os.path.exists(itq_cache):
             item_to_question = torch.load(itq_cache, map_location=device)
             print(f"Loaded item_to_question from cache ({item_to_question.max().item()+1} questions)")
         else:
@@ -1319,10 +1635,14 @@ if __name__ == "__main__":
     print(f"\nRunning: {args.warmup} warmup + {args.n_samples} posterior samples")
 
     # Draw all samples (warmup + posterior), with checkpointing for resume
+    thin = args.thin
+    if thin > 1:
+        print(f"Trace thinning: storing every {thin}-th sample")
     draw_result = sampler.draw(
         n=total_samples,
         checkpoint_dir=result_folder if args.blocked else None,
-        checkpoint_every=100,
+        checkpoint_every=500,
+        thin=thin,
     )
 
     if args.testlet:
@@ -1331,9 +1651,11 @@ if __name__ == "__main__":
         all_abilities, all_difficulties = draw_result
         all_gammas = None
 
-    # Discard warmup
-    ability_samples = all_abilities[args.warmup:]   # (n_samples, total_ability_dim)
-    difficulty_samples = all_difficulties[args.warmup:]  # (n_samples, n_questions)
+    # Discard warmup (account for thinning: stored indices are original_iter // thin)
+    warmup_stored = args.warmup // thin
+    ability_samples = all_abilities[warmup_stored:]   # (n_post_warmup, total_ability_dim)
+    difficulty_samples = all_difficulties[warmup_stored:]  # (n_post_warmup, n_questions)
+    print(f"Total stored samples: {len(all_abilities)}, discarding {warmup_stored} warmup")
 
     # Split ability samples back into per-student tensors
     print("Saving parameters...")
@@ -1351,15 +1673,16 @@ if __name__ == "__main__":
     torch.save(all_difficulties, f"{result_folder}/difficulty_chain.pt")
 
     if args.testlet:
-        gamma_samples = all_gammas[args.warmup:]
+        gamma_samples = all_gammas[warmup_stored:]
         torch.save(gamma_samples, f"{result_folder}/gamma.pt")
         torch.save(model.sigma2.cpu(), f"{result_folder}/sigma2.pt")
         torch.save(all_gammas, f"{result_folder}/gamma_chain.pt")
         print(f"  gamma.pt: shape {gamma_samples.shape}")
         print(f"  sigma2.pt: shape {model.sigma2.shape}")
 
+    n_posterior = len(ability_samples)
     print(f"\nResults saved to {result_folder}/")
-    print(f"  ability.pt: {len(ability)} students, {args.n_samples} posterior samples each")
+    print(f"  ability.pt: {len(ability)} students, {n_posterior} posterior samples each")
     print(f"  difficulty.pt: shape {difficulty_samples.shape}")
 
     # Save plots to shared results directory
@@ -1373,13 +1696,4 @@ if __name__ == "__main__":
         model, shared_result_dir,
     )
 
-    # Run posterior diagnostics
-    run_diagnostics(
-        ability_chain=all_abilities.cpu().numpy(),
-        difficulty_chain=all_difficulties.cpu().numpy(),
-        segment_sizes=model.segment_sizes,
-        result_dir=shared_result_dir,
-        warmup=args.warmup,
-        gamma_chain=all_gammas.cpu().numpy() if all_gammas is not None else None,
-    )
-    print("Done.")
+ 
