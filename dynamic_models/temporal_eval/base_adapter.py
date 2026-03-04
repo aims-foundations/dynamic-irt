@@ -1,0 +1,57 @@
+"""Abstract base class for model adapters."""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Optional
+
+import numpy as np
+
+from .data_loader import UnifiedData
+from .temporal_split import TemporalSplit
+
+
+@dataclass
+class PredictionResult:
+    """Standardized prediction output from any model."""
+
+    y_true: np.ndarray  # Binary ground truth (0 or 1), shape [N_test_obs]
+    y_pred_prob: np.ndarray  # Predicted P(correct), shape [N_test_obs]
+
+    # Optional metadata for diagnostic breakdown
+    student_indices: Optional[np.ndarray] = None
+    item_indices: Optional[np.ndarray] = None
+
+    @property
+    def n_observations(self) -> int:
+        return len(self.y_true)
+
+
+class ModelAdapter(ABC):
+    """Abstract interface that each model must implement."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Human-readable model name."""
+        ...
+
+    @abstractmethod
+    def fit_and_predict(
+        self,
+        data: UnifiedData,
+        split: TemporalSplit,
+        seed: int = 42,
+        **kwargs,
+    ) -> PredictionResult:
+        """Train on train items, predict on test items.
+
+        The model must ONLY use observations from train items for fitting.
+        It must produce P(correct) predictions for ALL valid observations
+        in the test items.
+        """
+        ...
+
+    @abstractmethod
+    def estimated_runtime_minutes(self, data: UnifiedData) -> float:
+        """Rough runtime estimate so the harness can plan."""
+        ...

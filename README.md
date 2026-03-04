@@ -6,18 +6,21 @@ A research project focused on understanding and predicting learning dynamics ove
 
 Traditional psychometrics models learning from binary response data (pass/fail). This project extends that paradigm: because we have **raw student code submissions**, we can pursue two complementary approaches:
 
-- **Dynamic IRT** (`dynamic_irt/`) - Classic psychometric models (Elo, GPIRT, RSSM) for learning curves from response data
-- **LLM Simulation** (`llm_simulator/`) - Fine-tuned LLMs that mimic student coding behavior from raw text
+- **Dynamic IRT** (`dynamic_models/`) — Psychometric models (Elo, CIRT, GPIRT, RSSM) for learning curves from response data
+- **LLM Simulation** (`llm_simulator/`) — Fine-tuned LLMs that mimic student coding behavior from raw text
 
 ## Datasets
 
-1. **CodeInsight** - University students learning C++ (includes both pass/fail and raw code)
-2. **Edmentum** - K-12 students learning math and reading (pass/fail only)
+1. **CodeInsight** — University students learning C++ (includes both pass/fail and raw code)
+2. **Edmentum** — K-12 students learning math and reading (pass/fail only)
+
+Data sources: HuggingFace [`stair-lab/code_insights_csv`](https://huggingface.co/datasets/stair-lab/code_insights_csv), [`CodeInsightTeam/code_insights_csv`](https://huggingface.co/datasets/CodeInsightTeam/code_insights_csv)
+
+Supported courses: DSA-HK231 (L09, DT01), DSA-HK222, DSA-HK232, PF courses
 
 ## Getting Started
 
 ```bash
-git clone https://github.com/sangttruong/CodeInsights.git
 pip install -r requirements.txt
 ```
 
@@ -25,176 +28,240 @@ pip install -r requirements.txt
 
 ```
 CodeInsights/
-├── data_collection/        # Web scraping + data preprocessing
-│   ├── collect_data.py     # Selenium-based scraping
-│   ├── convert_matrices.py # Data ETL for matrix format
-│   └── wnb_configs/        # Weights & Biases configs
+├── data_collection/           # Web scraping + data preprocessing
+│   ├── collect_data.py        # Selenium-based scraping from online judge
+│   ├── csv2matrices.py        # CSV -> 3D tensor matrices
+│   ├── convert_matrices.py    # Data ETL for matrix format
+│   └── skill_tagging/         # LLM-based skill labeling for questions
 │
-├── data_analysis/          # Analysis of student behavior and LLM outputs
-│   ├── eda_codeinsight.py              # Exploratory data analysis
-│   ├── student_behavior_clustering.py  # K-means clustering on submissions
-│   ├── pace_analysis.py                # Timing and pacing analysis
-│   ├── compute_metrics.py              # Functional correctness, AST, CodeBERT metrics
+├── data_analysis/             # Analysis of student behavior
+│   ├── eda_codeinsight.py     # Exploratory data analysis
+│   ├── student_behavior_clustering.py  # K-means on submission patterns
+│   ├── pace_analysis.py       # Timing and pacing analysis
+│   ├── compute_metrics.py     # Functional correctness, AST, CodeBERT
 │   ├── psychometrics_metrics.py        # IRT ability/difficulty estimation
-│   ├── cossim_calculator.py            # AST edit distance + CodeBERT similarity
-│   └── generate_plots.py              # Publication figures
+│   └── generate_plots.py      # Publication figures
 │
-├── dynamic_irt/            # All learning dynamics models
-│   ├── cirt/               # Continuous IRT models
-│   ├── gpirt/              # Gaussian Process IRT
-│   ├── elo/                # Elo-based rating (Edmentum + CodeInsight)
-│   ├── rssm/               # Recurrent State-Space Models
-│   ├── simulated_learner/  # Synthetic student behavior
-│   └── codeinsights_testlet_analysis.R  # Bayesian Testlet Response Theory (R)
+├── dynamic_models/               # All learning dynamics models (flat layout)
+│   ├── cirt.py                # Continuous IRT (parametric growth curves)
+│   ├── dynamic_models.py         # Dynamic IRT (time-varying latent traits)
+│   ├── elo.py                 # Elo-based rating (Edmentum + CodeInsight)
+│   ├── gpirt.py               # Gaussian Process IRT (ESS inference)
+│   ├── rssm.py                # Recurrent State-Space Models
+│   ├── featurize.py           # Model-agnostic feature extraction
+│   ├── mcmc_diagnostics.py    # GPIRT chain convergence diagnostics
+│   └── temporal_eval/         # Temporal evaluation framework
+│       ├── harness.py         # Run all models across temporal horizons
+│       ├── data_loader.py     # Unified data loading
+│       ├── temporal_split.py  # Week-based train/test splits
+│       ├── metrics.py         # AUC, accuracy, F1, RMSE, log-likelihood
+│       ├── plot_results.py    # Metrics, trajectories, concept scatter
+│       ├── run_temporal_eval.py  # CLI entry point
+│       └── adapters/          # Per-model adapters (Elo, CIRT, GPIRT, ...)
 │
-├── llm_simulator/          # LLM input→output engine
-│   ├── config.py           # Prompt templates and model configs
-│   ├── grading_engine.py   # C++ compilation and test execution
-│   ├── utils.py            # Inference utilities (vLLM, prompt formatting)
-│   ├── data_preprocessing.py           # Generates scenario datasets from HF
-│   ├── run_single_turn.py              # Single-turn runners for all models (API + vLLM)
-│   ├── run_iterative_model.py          # Multi-attempt S1 simulation with test feedback
-│   └── training/           # SFT fine-tuning pipeline
+├── llm_simulator/             # LLM student simulation
+│   ├── runners.py             # Unified model runners + registry
+│   ├── prompts.py             # Prompt builder (zero-shot / few-shot / feedback)
+│   ├── data_loader.py         # Data loading + example selection
+│   ├── run.py                 # Unified CLI entry point
+│   ├── grading_engine.py      # C++ compilation and test execution
+│   ├── data_preprocessing.py  # Generate scenario datasets from HF
+│   ├── config.py              # Legacy prompt templates (used by training)
+│   ├── utils.py               # Inference utilities (used by training)
+│   └── training/              # SFT fine-tuning pipeline
+│       ├── build_dataset.py   # Build SFT training datasets
+│       ├── sft.py             # SFT training wrapper (TRL)
+│       ├── main_optimize.py   # Hyperparameter optimization
+│       ├── merge_model.py     # LoRA merge + HF push
+│       └── configs/           # YAML training configs
 │
-├── reproducibility_results/ # Pipeline outputs and report
-│   └── generate_report.py  # Compares results against paper values
+├── script/                    # Reproducibility pipeline
+│   ├── reproduce.sh           # Full pipeline (Steps 1-7)
+│   ├── generate_report.py     # Compare results against paper
+│   ├── inspect_hf_run.py      # Pull and inspect HELM runs from HF
+│   └── upload_to_hf.py        # Push results to HuggingFace
 │
-├── reproduce.sh            # Full reproducibility pipeline (Steps 1–7)
-└── docs/                   # Hugo-based presentation slides
+├── archived/                  # Legacy code (HELM benchmark components)
+└── docs/                      # Hugo-based presentation slides
 ```
 
-## Data Collection
+## Dynamic IRT Models
 
-```bash
-# Scrape student submissions
-python data_collection/collect_data.py --course_name DSA-HK231 --class_name L09
+### Temporal Evaluation (primary comparison framework)
 
-# Convert to matrix format
-python data_collection/convert_matrices.py --course_name dsa_hk231
-```
+Week-based temporal splits: train on weeks 1..W, predict weeks W+1+.
 
-## Data Analysis
-
-Exploratory data analysis, clustering, and behavioral analysis of student submissions.
-
-```bash
-# Reproduce all analyses (EDA, clustering, pacing, problem-level)
-cd data_analysis
-bash reproduce.sh
-
-# Or run individual scripts
-python data_analysis/eda_codeinsight.py
-python data_analysis/student_behavior_clustering.py
-python data_analysis/pace_analysis.py --all_courses
-python data_analysis/problem_by_problem_analysis.py --all_courses
-```
-
-See [data_analysis/README.md](data_analysis/README.md) for detailed documentation.
-
-## Learning Dynamics Models
-
-### RSSM (Recurrent State-Space Models)
-```bash
-python dynamic_irt/rssm/process_data.py
-python dynamic_irt/rssm/main_rssm.py
-```
-
-### Elo-based IRT (supports Edmentum + CodeInsight datasets)
 ```bash
 cd CodeInsights
-python -m dynamic_irt.elo.main_elo
-python -m dynamic_irt.elo.difficulty_analysis
+
+# Run all models
+python -m dynamic_models.temporal_eval.run_temporal_eval --course_name all
+
+# Specific models
+python -m dynamic_models.temporal_eval.run_temporal_eval \
+    --course_name dsa_hk231 --models Elo CIRT DynamicIRT
+
+# Skip slow models (GPIRT)
+python -m dynamic_models.temporal_eval.run_temporal_eval --skip_slow
 ```
+
+Results: `results/temporal_eval/temporal_eval_{course}.csv`
+
+Plots generated: metrics vs horizon, student trajectories, concept pair scatter.
+
+### Individual Models
+
+```bash
+# Elo
+python -m dynamic_models.elo
+
+# RSSM (requires pre-processed features)
+python -m dynamic_models.featurize --mode features --course all
+python -m dynamic_models.rssm --mode features --cls all
+
+# GPIRT (multi-chain MCMC)
+CUDA_VISIBLE_DEVICES=0 python -m dynamic_models.gpirt \
+    --course_name all --n_samples 15000 --warmup 500 \
+    --blocked --testlet --thin 10 --seed 62
+
+# MCMC diagnostics (ONLY after all chains finish)
+python -m dynamic_models.mcmc_diagnostics --seeds 62 63 64 65 --warmup 500 --course all
+```
+
+### GPIRT Operational Notes
+
+- **Never run diagnostics while chains are running.** Loading 4 checkpoints (~24 GB each) can OOM and corrupt in-progress `torch.save()` writes.
+- Check `free -h` before loading multiple chains (~96 GB for 4 chains on `all`).
+- Checkpoints resume automatically if interrupted (saves every 500 iterations).
 
 ## LLM Simulator
 
-The LLM simulator treats language models as student behavior generators: questions go in, code responses come out. It evaluates LLMs across four scenarios that mirror real student interactions with an online judge.
+Treats language models as student behavior generators: questions in, code responses out.
 
-### Evaluation Scenarios
+One unified scenario — "imitate this student" — parameterized by:
+- `--n_examples N`: number of in-context examples (0 = zero-shot, N = few-shot with student code)
+- `--max_attempts N`: retry budget (1 = single-shot, >1 = iterative with compile/test feedback)
 
-| Scenario | Goal | Key Metrics |
-|----------|------|-------------|
-| **S1 – Correct Code** | Write a correct C++ solution | Functional correctness |
-| **S2 – Behavior Imitation** | Replicate a specific student's coding style | Correctness + AST + CodeBERT similarity |
-| **S3 – Error Replication** | Generate realistic student mistakes | All S2 metrics + mistake alignment |
-| **S4 – Efficiency Alignment** | Match a student's runtime efficiency | All S3 metrics + runtime correlation |
+All metrics (functional correctness, AST similarity, CodeBERT, mistake alignment, runtime) are computed on every output.
 
 ### Supported Models
 
-**Commercial**: `claude-sonnet-4`, `gpt-4.1-nano`, `gemini-2.0-flash`, `mistral-large-latest`
+**Commercial**: `claude` (claude-sonnet-4), `gpt` (gpt-4.1-nano), `gemini` (gemini-2.0-flash), `mistral` (mistral-large-latest)
 
-**Open-source** (via vLLM): `gemma-3-27b-it`, `llama-3.1-8b-instruct`, `qwen2.5-14b-instruct`
+**Open-source** (via vLLM): `llama` (Llama-3.1-8B), `gemma` (Gemma-3-27B), `qwen` (Qwen2.5-14B), `glm` (GLM-4.7-AWQ)
 
-### Installation
-
-```bash
-pip install pandas numpy requests jinja2 anthropic openai google-generativeai mistralai
-pip install transformers torch scikit-learn apted tree-sitter tree-sitter-cpp
-pip install scipy matplotlib seaborn tueplots huggingface-hub vllm
-
-# R dependencies (for testlet analysis)
-Rscript -e 'install.packages(c("dplyr", "tidyr", "ggplot2", "brms", "pROC"))'
-```
-
-### Running the Full Pipeline
+### Running
 
 ```bash
-# Set API keys
-export ANTHROPIC_API_KEY="..."
-export OPENAI_API_KEY="..."
-export GOOGLE_API_KEY="..."
-export MISTRAL_API_KEY="..."
-export HF_TOKEN="..."
+cd CodeInsights
 
-# Run all steps (data → LLM eval → metrics → psychometrics → plots → report)
-./reproduce.sh
+# Generate scenario datasets
+python -m llm_simulator.data_preprocessing
 
-# Skip LLM evaluation (use existing results)
-./reproduce.sh --skip-llm
+# Zero-shot (no student examples)
+python -m llm_simulator.run --models claude gpt --n_examples 0
+
+# Few-shot student simulation (3 examples of the student's code)
+python -m llm_simulator.run --models claude gpt --n_examples 3
+
+# Iterative with test feedback (zero-shot + retry on failure)
+python -m llm_simulator.run --models claude --max_attempts 100
+
+# Few-shot + iterative
+python -m llm_simulator.run --models claude --n_examples 3 --max_attempts 5
+
+# Quick test (dry run)
+python -m llm_simulator.run --models claude --n_examples 0 --max_samples 2 --dry_run
 ```
 
-### Running Individual Steps
-
-```bash
-# Step 1: Generate scenario datasets from HuggingFace
-(cd llm_simulator && python data_preprocessing.py)
-
-# Step 2: Run LLMs (single-shot, all 4 scenarios)
-(cd llm_simulator && python run_single_turn.py --models claude gpt gemini mistral)   # commercial
-(cd llm_simulator && python run_single_turn.py --models llama gemma qwen)            # open-source (GPU)
-
-# Step 2b: Run iterative S1 evaluation (multi-attempt with test feedback)
-(cd llm_simulator && python run_iterative_model.py --models claude-sonnet-4 gpt-4.1-nano)
-
-# Step 3–4: Compute metrics and psychometrics
-(cd data_analysis && python compute_metrics.py)
-python data_analysis/psychometrics_metrics.py --data reproducibility_results --output reproducibility_results/psychometrics
-
-# Step 5: Testlet analysis (R)
-Rscript dynamic_irt/codeinsights_testlet_analysis.R
-```
-
-### Training (SFT with LoRA)
+### SFT Training (LoRA)
 
 ```bash
 trl sft --config llm_simulator/training/configs/sft_dsa_hk231.yaml \
     --use_peft --lora_r 256 --lora_alpha 512 --lora_dropout 0.1
 ```
 
-## Documentation
+### Environment Variables
 
-Run the presentation slides locally:
 ```bash
-cd docs && hugo server
+export ANTHROPIC_API_KEY="..."
+export OPENAI_API_KEY="..."
+export GOOGLE_API_KEY="..."
+export MISTRAL_API_KEY="..."
+export HF_TOKEN="..."
 ```
 
-## Supported Courses
+## Reproducibility
 
-- DSA-HK231 (L09, DT01)
-- DSA-HK222
-- DSA-HK232
-- PF courses
+```bash
+cd CodeInsights/script
 
-## Data Sources
+# Full pipeline (data -> LLM eval -> metrics -> psychometrics -> plots -> report)
+./reproduce.sh
 
-- HuggingFace: `CodeInsightTeam/code_insights_csv`, `stair-lab/code_insights_csv`
+# Skip LLM evaluation (use existing results)
+./reproduce.sh --skip-llm
+```
+
+---
+
+## D1/D2 Pipeline: Comparing Human vs LLM Learning Dynamics
+
+**Goal**: Create a unified pipeline so that human data (D1) and LLM-simulated data (D2) share a canonical format. Any IRT model can consume either dataset identically, enabling direct comparison of latent statistics (ability trajectories, difficulty estimates, learning curves).
+
+### Canonical CSV Schema
+
+```
+student_id      : str    -- learner identifier
+item_id         : str    -- "question_id_testcase_index" (atomic binary item)
+attempt_index   : int    -- 0-indexed attempt number per (student, item)
+correctness     : int    -- 0 or 1
+timestamp_days  : float  -- days since course start (real for D1, ordinal for D2)
+response        : str    -- raw code (optional, for RSSM embeddings)
+source          : str    -- "human" or LLM model name
+course_id       : str    -- course identifier
+```
+
+### Stage 1: Data Export
+
+**D1 (Human Data)**
+- Source: HuggingFace `stair-lab/code_insights_csv` (`main_data.csv`)
+- Scale: 3,286 students, 396 problems, 3M+ submissions
+- Processing: explode binary pass strings into per-testcase rows, compute timestamps and attempt indices
+
+**D2 (LLM-Simulated Data)**
+- Two input formats: HELM (open-source models from HF) and CSV (commercial models from `run_single_turn.py`)
+- Timestamps: ordinal indexing (avoids fabricating temporal data)
+- Multi-attempt: D2 has single attempts per question (sufficient for Elo; noted limitation for CIRT/GPIRT)
+
+### Stage 2: Unified Model Fitting
+
+Each model produces standardized outputs:
+- `ability_trajectories.csv`: student ability estimates over time
+- `difficulty_estimates.csv`: per-item difficulty estimates
+- `fit_metrics.json`: AUC, accuracy, F1, log-likelihood
+
+Model priority: Elo (works naturally with single-attempt D2) > CIRT > GPIRT > RSSM (deferred, requires CodeBERT embeddings)
+
+### Stage 3: Comparative Analysis
+
+- **Ability distributions**: KS test, KL divergence, Wasserstein distance
+- **Difficulty alignment**: Pearson/Spearman correlation on shared items
+- **Learning curves**: Compare growth rates and asymptotic abilities
+- **Archetype clustering**: K-means on IRT-derived features, compare D1 vs D2 cluster profiles
+
+### D2 Data Inventory
+
+| Source | Models | Temps | Status |
+|--------|--------|-------|--------|
+| HF `CodeInsightTeam/evaluation_results` | gemma, llama, deepseek | 0.0 | S1/S2/S3 only |
+| Local `codeinsights_Dec8` | gemma, llama, qwen | 0.3/0.6/0.9 | 35/36 complete |
+| Local `codeinsights_Oct3` | llama, qwen, gpt-4o | 0.0/0.5/1.0 | Mostly incomplete |
+| Commercial (from `run_single_turn.py`) | claude, gpt, gemini, mistral | -- | Needs locating |
+
+### Key Findings So Far
+
+- Claude Sonnet 4 achieves highest UTSR (0.668) and best ability recovery (rho=0.359)
+- Open-source models have better structural alignment (lower ASTED) but worse functional correctness
+- All models over-optimize (EAS > 1.0) -- they write faster code than real students
+- Psychometric correlations are modest (0.15-0.36), indicating LLMs don't yet faithfully recover latent parameters

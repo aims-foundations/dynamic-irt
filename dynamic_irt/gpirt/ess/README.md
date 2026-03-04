@@ -1,1 +1,0 @@
-# Elliptical slide sampling
