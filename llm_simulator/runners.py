@@ -90,17 +90,22 @@ class GeminiRunner(LLMRunner):
 
 
 class OpenAIRunner(LLMRunner):
-    def __init__(self, api_model: str, **kwargs):
+    def __init__(self, api_model: str, base_url: str = None,
+                 api_key: str = None, max_tokens: int = 4000, **kwargs):
         super().__init__(**kwargs)
         import openai as _openai
-        self.client = _openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self.client = _openai.OpenAI(
+            api_key=api_key or os.environ.get("OPENAI_API_KEY", "EMPTY"),
+            base_url=base_url,
+        )
         self.api_model = api_model
+        self.max_tokens = max_tokens
 
     def call(self, prompt: str) -> str:
         resp = self.client.chat.completions.create(
             model=self.api_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=4000, stop=["\n```"],
+            max_tokens=self.max_tokens,
         )
         return resp.choices[0].message.content
 
@@ -136,12 +141,13 @@ class VLLMRunner(LLMRunner):
 
     def __init__(self, hf_id: str, max_tokens: int = 4000,
                  temperature: float = 0.0, tensor_parallel_size: int = 1,
-                 **kwargs):
+                 enforce_eager: bool = True, **kwargs):
         super().__init__(**kwargs)
         self.hf_id = hf_id
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.tensor_parallel_size = tensor_parallel_size
+        self.enforce_eager = enforce_eager
         self._model = None
         self._sampling_params = None
 
@@ -149,27 +155,34 @@ class VLLMRunner(LLMRunner):
         if self._model is not None:
             return
         from vllm import LLM, SamplingParams
-        logger.info("Initializing vLLM: %s", self.hf_id)
+        logger.info("Initializing vLLM: %s (enforce_eager=%s)", self.hf_id, self.enforce_eager)
         self._model = LLM(
             model=self.hf_id,
             tensor_parallel_size=self.tensor_parallel_size,
             dtype="auto",
             trust_remote_code=True,
+            enforce_eager=self.enforce_eager,
         )
         self._sampling_params = SamplingParams(
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            stop=["```\n", "\n```"],
         )
+
+    def _make_messages(self, prompt: str):
+        """Wrap a text prompt in chat message format."""
+        return [{"role": "user", "content": prompt}]
 
     def call(self, prompt: str) -> str:
         self._ensure_initialized()
-        outputs = self._model.generate([prompt], self._sampling_params)
+        outputs = self._model.chat(
+            [self._make_messages(prompt)], self._sampling_params,
+        )
         return outputs[0].outputs[0].text
 
     def generate(self, prompts: List[str]) -> List[str]:
         self._ensure_initialized()
-        outputs = self._model.generate(prompts, self._sampling_params)
+        conversations = [self._make_messages(p) for p in prompts]
+        outputs = self._model.chat(conversations, self._sampling_params)
         return [o.outputs[0].text if o.outputs else "" for o in outputs]
 
     def cleanup(self):
@@ -235,8 +248,18 @@ MODEL_CONFIGS: Dict[str, dict] = {
     "glm": {
         "hf_id": "QuantTrio/GLM-4.7-AWQ",
         "backend": "vllm",
-        "max_tokens": 4000,
+        "max_tokens": 8000,
         "temperature": 0.0,
+    },
+    # vLLM serve mode — connect to a running vLLM server via OpenAI API
+    "glm_server": {
+        "api_model": "QuantTrio/GLM-4.7-AWQ",
+        "backend": "openai",
+        "base_url": "http://localhost:8000/v1",
+        "api_key": "EMPTY",
+        "max_tokens": 8000,
+        "max_workers": 32,
+        "delay": 0.0,
     },
 }
 
@@ -266,8 +289,15 @@ def create_runner(model_key: str, tensor_parallel_size: int = 1) -> LLMRunner:
         )
 
     cls = _API_RUNNER_MAP[backend]
-    return cls(
-        api_model=config["api_model"],
-        max_workers=config.get("max_workers", 2),
-        delay=config.get("delay", 1.0),
-    )
+    kwargs = {
+        "api_model": config["api_model"],
+        "max_workers": config.get("max_workers", 2),
+        "delay": config.get("delay", 1.0),
+    }
+    if "base_url" in config:
+        kwargs["base_url"] = config["base_url"]
+    if "api_key" in config:
+        kwargs["api_key"] = config["api_key"]
+    if "max_tokens" in config:
+        kwargs["max_tokens"] = config["max_tokens"]
+    return cls(**kwargs)

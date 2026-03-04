@@ -11,13 +11,21 @@ from typing import Dict, List, Optional
 
 # ── Code extraction ──────────────────────────────────────────────────────────
 
-_CPP_FENCE_RE = re.compile(r"```(?:cpp|c\+\+)?\n(.*?)(?:\n```|$)", re.DOTALL)
+_CPP_FENCE_RE = re.compile(r"```(?:cpp|c\+\+)\n(.*?)(?:\n```|$)", re.DOTALL)
+_ANY_FENCE_RE = re.compile(r"```[\w+]*\n(.*?)(?:\n```|$)", re.DOTALL)
 
 
 def extract_code(llm_output: str) -> Optional[str]:
     """Return the first C++ code block from markdown fences, or None."""
+    # Prefer ```cpp or ```c++ fences
     m = _CPP_FENCE_RE.search(llm_output)
-    return m.group(1).strip() if m else None
+    if m:
+        return m.group(1).strip()
+    # Fall back to any fenced code block (```, ```c, etc.)
+    m = _ANY_FENCE_RE.search(llm_output)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    return None
 
 
 # ── Shared instruction block ────────────────────────────────────────────────
@@ -71,18 +79,36 @@ def build_prompt(
     """
     parts: List[str] = []
 
-    # ── In-context examples (few-shot) ──
+    # ── In-context examples (few-shot / trajectory) ──
     if examples:
-        parts.append("=== Student Code Examples ===\n")
-        for n, ex in enumerate(examples, start=1):
-            parts.append(
-                f"Example {n}:\n"
-                f"Question: {ex['question_name']} — {ex['question_text']}\n"
-                f"Template:\n{ex['question_template']}\n"
-                f"Student's Code:\n{ex['response']}\n"
-            )
+        parts.append("=== Student Submission History ===\n")
         parts.append(
-            "Now, using the same student's coding style, attempt this new problem:\n"
+            "Below are this student's previous submissions on other problems, "
+            "showing how they code and iterate.\n"
+        )
+
+        # Group consecutive examples by question_name
+        from itertools import groupby
+        q_num = 0
+        for qname, group in groupby(examples, key=lambda x: x["question_name"]):
+            group = list(group)
+            q_num += 1
+            parts.append(
+                f"--- Problem {q_num}: {qname} ---\n"
+                f"{group[0]['question_text']}\n\n"
+                f"Template:\n{group[0]['question_template']}\n"
+            )
+            if len(group) == 1:
+                parts.append(f"Student's Code:\n{group[0]['response']}\n")
+            else:
+                for a, ex in enumerate(group, start=1):
+                    parts.append(
+                        f"Attempt {a}:\n{ex['response']}\n"
+                    )
+
+        parts.append(
+            "Now, using the same student's coding style and approach, "
+            "attempt this new problem:\n"
         )
 
     # ── Target question ──

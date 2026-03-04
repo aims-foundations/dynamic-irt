@@ -1,9 +1,0 @@
-program: inference.py
-project: code_insights
-method: grid
-metric:
-    goal: maximize
-    name: acc
-parameters:
-    cls: 
-        values: [CC01, CC02, CC03, CC07, CC08, DT01, L02, L04, L05, L06, L07, L08, L09, L10, L13]
