@@ -11,8 +11,10 @@ from typing import Dict, List, Optional
 
 # ── Code extraction ──────────────────────────────────────────────────────────
 
-_CPP_FENCE_RE = re.compile(r"```(?:cpp|c\+\+)\n(.*?)(?:\n```|$)", re.DOTALL)
-_ANY_FENCE_RE = re.compile(r"```[\w+]*\n(.*?)(?:\n```|$)", re.DOTALL)
+# Fix: Allow optional whitespace before closing ``` (GLM outputs indented closings)
+# Old pattern: (?:\n```|$) would fall back to end-of-string when closing was indented
+_CPP_FENCE_RE = re.compile(r"```(?:cpp|c\+\+)\n(.*?)\n\s*```", re.DOTALL)
+_ANY_FENCE_RE = re.compile(r"```[\w+]*\n(.*?)\n\s*```", re.DOTALL)
 
 
 def extract_code(llm_output: str) -> Optional[str]:
