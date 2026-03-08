@@ -68,9 +68,10 @@ class EvalResult:
     model: str
     n_examples: int
     attempts: List[AttemptRecord] = field(default_factory=list)
-    # Student info lookup (populated from real data)
+    # Lookups from real data
     course_id: str = ""
     section_id: str = ""
+    is_exam: str = ""
 
     def to_rows(self) -> List[dict]:
         """Convert to dicts matching human data schema exactly.
@@ -90,7 +91,7 @@ class EvalResult:
                 "question_unittest_id": self.question_id,
                 "attempt_id": str(rec.attempt_id),  # String to match real data
                 "timestamp": rec.timestamp,  # Already in DD/MM/YY format
-                "is_exam": "0",  # Default; question-level, not student-level
+                "is_exam": self.is_exam or "",
                 "response_type": rec.response_type,
                 "response": rec.code or "",
                 "pass": rec.pass_pattern,
@@ -203,6 +204,7 @@ def run_batch_iterative(
     n_public_map: Dict[str, int],
     student_to_course: Optional[Dict[str, str]] = None,
     student_to_section: Optional[Dict[str, str]] = None,
+    question_to_is_exam: Optional[Dict[str, str]] = None,
     tensor_parallel_size: int = 1,
     output_dir: Optional[str] = None,
     batch_size: int = 50,
@@ -242,6 +244,7 @@ def run_batch_iterative(
     # Initialize results and tracking
     student_to_course = student_to_course or {}
     student_to_section = student_to_section or {}
+    question_to_is_exam = question_to_is_exam or {}
     results: List[EvalResult] = [
         EvalResult(
             question_id=item.question_id,
@@ -250,6 +253,7 @@ def run_batch_iterative(
             n_examples=n_examples,
             course_id=student_to_course.get(str(item.student_id), ""),
             section_id=student_to_section.get(str(item.student_id), ""),
+            is_exam=question_to_is_exam.get(str(item.question_id), ""),
         )
         for item in items
     ]
@@ -540,6 +544,15 @@ def main():
     )
     logger.info("Built student info mappings for %d students.", len(student_to_course))
 
+    # Build question → is_exam mapping from real data
+    question_info = main_df[["question_unittest_id", "is_exam"]].drop_duplicates(
+        subset=["question_unittest_id"]
+    )
+    question_to_is_exam = dict(
+        zip(question_info["question_unittest_id"].astype(str), question_info["is_exam"].astype(str))
+    )
+    logger.info("Built question info mappings for %d questions.", len(question_to_is_exam))
+
     # ── Run each model ───────────────────────────────────────────────────
     for model_key in args.models:
         logger.info("=== Running %s ===", model_key)
@@ -550,6 +563,7 @@ def main():
                 n_public_map=n_public_map,
                 student_to_course=student_to_course,
                 student_to_section=student_to_section,
+                question_to_is_exam=question_to_is_exam,
                 tensor_parallel_size=args.tp,
                 output_dir=args.output_dir,
                 shard=args.shard,
