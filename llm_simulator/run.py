@@ -70,20 +70,24 @@ class EvalResult:
     attempts: List[AttemptRecord] = field(default_factory=list)
 
     def to_rows(self) -> List[dict]:
-        """Convert to dicts matching human data schema where possible.
+        """Convert to dicts matching human data schema exactly.
 
-        Shared columns (same name as main_data.csv):
-            student_id, question_unittest_id, attempt_id, timestamp,
-            response_type, response, pass
+        Shared columns (same name/type as main_data.csv):
+            student_id, course_id, section_id, question_unittest_id,
+            attempt_id, timestamp, is_exam, response_type, response, pass
         LLM-specific columns:
             model, n_examples, prompt, raw_response
         """
         return [
             {
+                # Schema-compatible fields (match main_data.csv exactly)
                 "student_id": self.student_id or "",
+                "course_id": "0",  # Default; can be mapped if needed
+                "section_id": "0",  # Default; not used by IRT models
                 "question_unittest_id": self.question_id,
-                "attempt_id": rec.attempt_id,
-                "timestamp": rec.timestamp,
+                "attempt_id": str(rec.attempt_id),  # String to match real data
+                "timestamp": rec.timestamp,  # Already in DD/MM/YY format
+                "is_exam": "0",  # Default; used by RSSM featurization
                 "response_type": rec.response_type,
                 "response": rec.code or "",
                 "pass": rec.pass_pattern,
@@ -282,7 +286,8 @@ def run_batch_iterative(
             all_responses.extend(runner.generate(chunk))
 
         # Process results and determine who needs retry
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # Use DD/MM/YY format to match real student data (required by IRT models)
+        timestamp = time.strftime("%d/%m/%y, %H:%M:%S")
         next_active = []
         for i, idx in enumerate(active):
             raw = all_responses[i]
@@ -347,7 +352,7 @@ def run_batch_iterative(
         final_pass = "".join(str(x) for x in final["testcases"])
         results[idx].attempts.append(AttemptRecord(
             attempt_id=len(results[idx].attempts),
-            timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            timestamp=time.strftime("%d/%m/%y, %H:%M:%S"),
             response_type="Submit",
             prompt="",
             raw_response=last_code[idx] or "",
