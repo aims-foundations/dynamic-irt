@@ -68,6 +68,9 @@ class EvalResult:
     model: str
     n_examples: int
     attempts: List[AttemptRecord] = field(default_factory=list)
+    # Student info lookup (populated from real data)
+    course_id: str = ""
+    section_id: str = ""
 
     def to_rows(self) -> List[dict]:
         """Convert to dicts matching human data schema exactly.
@@ -82,12 +85,12 @@ class EvalResult:
             {
                 # Schema-compatible fields (match main_data.csv exactly)
                 "student_id": self.student_id or "",
-                "course_id": "0",  # Default; can be mapped if needed
-                "section_id": "0",  # Default; not used by IRT models
+                "course_id": self.course_id or "",
+                "section_id": self.section_id or "",
                 "question_unittest_id": self.question_id,
                 "attempt_id": str(rec.attempt_id),  # String to match real data
                 "timestamp": rec.timestamp,  # Already in DD/MM/YY format
-                "is_exam": "0",  # Default; used by RSSM featurization
+                "is_exam": "0",  # Default; question-level, not student-level
                 "response_type": rec.response_type,
                 "response": rec.code or "",
                 "pass": rec.pass_pattern,
@@ -198,6 +201,8 @@ def run_batch_iterative(
     n_examples: int,
     max_attempts: int,
     n_public_map: Dict[str, int],
+    student_to_course: Optional[Dict[str, str]] = None,
+    student_to_section: Optional[Dict[str, str]] = None,
     tensor_parallel_size: int = 1,
     output_dir: Optional[str] = None,
     batch_size: int = 50,
@@ -235,12 +240,16 @@ def run_batch_iterative(
         }
 
     # Initialize results and tracking
+    student_to_course = student_to_course or {}
+    student_to_section = student_to_section or {}
     results: List[EvalResult] = [
         EvalResult(
             question_id=item.question_id,
             student_id=item.student_id,
             model=model_key,
             n_examples=n_examples,
+            course_id=student_to_course.get(str(item.student_id), ""),
+            section_id=student_to_section.get(str(item.student_id), ""),
         )
         for item in items
     ]
@@ -512,12 +521,24 @@ def main():
         logger.info("Dry run complete. %d items loaded.", len(items))
         return
 
-    # ── Load public test counts ─────────────────────────────────────────
+    # ── Load public test counts and student info ────────────────────────
     from .data_loader import _load_hf_main_data
-    logger.info("Loading main_data.csv for public-test inference…")
+    logger.info("Loading main_data.csv for public-test inference and student info…")
     main_df = _load_hf_main_data()
     n_public_map = infer_public_test_counts(main_df)
     logger.info("Inferred public-test counts for %d questions.", len(n_public_map))
+
+    # Build student → course_id and section_id mappings from real data
+    student_info = main_df[["student_id", "course_id", "section_id"]].drop_duplicates(
+        subset=["student_id"]
+    )
+    student_to_course = dict(
+        zip(student_info["student_id"].astype(str), student_info["course_id"].astype(str))
+    )
+    student_to_section = dict(
+        zip(student_info["student_id"].astype(str), student_info["section_id"].astype(str))
+    )
+    logger.info("Built student info mappings for %d students.", len(student_to_course))
 
     # ── Run each model ───────────────────────────────────────────────────
     for model_key in args.models:
@@ -527,6 +548,8 @@ def main():
                 items, model_key, args.n_examples,
                 max_attempts=args.max_attempts,
                 n_public_map=n_public_map,
+                student_to_course=student_to_course,
+                student_to_section=student_to_section,
                 tensor_parallel_size=args.tp,
                 output_dir=args.output_dir,
                 shard=args.shard,
