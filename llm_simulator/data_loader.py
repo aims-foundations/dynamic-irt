@@ -39,6 +39,8 @@ class Example:
     question_text: str
     question_template: str
     response: str
+    response_type: str = "Submit"      # "Prechecked" or "Submit"
+    pass_pattern: str = ""             # e.g. "1101" — test results after this attempt
 
 
 @dataclass
@@ -89,13 +91,16 @@ def infer_public_test_counts(main_df: pd.DataFrame) -> Dict[str, int]:
     Prechecked submissions are absent from the dict.
     """
     precheck = main_df[main_df["response_type"] == "Prechecked"].copy()
+    precheck = precheck[precheck["pass"].notna()]
     precheck["pass_len"] = precheck["pass"].astype(str).str.len()
-    n_public = (
-        precheck.groupby("question_unittest_id")["pass_len"]
-        .agg(lambda x: int(x.mode().iloc[0]))
-        .to_dict()
-    )
-    return {str(k): v for k, v in n_public.items()}
+    n_public = {}
+    for qid, group in precheck.groupby("question_unittest_id")["pass_len"]:
+        modes = group.mode()
+        if len(modes) > 0:
+            n_public[str(qid)] = int(modes.iloc[0])
+        elif len(group) > 0:
+            n_public[str(qid)] = int(group.median())
+    return n_public
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
@@ -216,9 +221,9 @@ def _load_trajectory(
     main_df = _load_hf_main_data()
     q_df = _load_hf_questions()
 
-    # Keep Submit responses, merge question info
+    # Keep Prechecked + Submit responses, merge question info
     subs = main_df.dropna(subset=["response"]).copy()
-    subs = subs[subs["response_type"] == "Submit"].sort_values("timestamp")
+    subs = subs[subs["response_type"].isin(["Prechecked", "Submit"])].sort_values("timestamp")
 
     q_cols = [
         "question_id", "question_name", "question_text",
@@ -320,6 +325,8 @@ def _load_trajectory(
                             question_text=r["question_text"],
                             question_template=r["question_template"],
                             response=r["response"],
+                            response_type=r.get("response_type", "Submit"),
+                            pass_pattern=str(r.get("pass", "")),
                         ))
 
             if not examples:

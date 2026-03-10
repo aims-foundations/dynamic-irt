@@ -91,21 +91,25 @@ class GeminiRunner(LLMRunner):
 
 class OpenAIRunner(LLMRunner):
     def __init__(self, api_model: str, base_url: str = None,
-                 api_key: str = None, max_tokens: int = 4000, **kwargs):
+                 api_key: str = None, max_tokens: int = 4000,
+                 stop: list = None, **kwargs):
         super().__init__(**kwargs)
         import openai as _openai
         self.client = _openai.OpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY", "EMPTY"),
             base_url=base_url,
+            timeout=1800.0,  # 30 min — large prompts + busy servers need headroom
         )
         self.api_model = api_model
         self.max_tokens = max_tokens
+        self.stop = stop
 
     def call(self, prompt: str) -> str:
         resp = self.client.chat.completions.create(
             model=self.api_model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=self.max_tokens,
+            stop=self.stop,
         )
         return resp.choices[0].message.content
 
@@ -257,7 +261,7 @@ MODEL_CONFIGS: Dict[str, dict] = {
         "backend": "openai",
         "base_url": "http://localhost:8000/v1",
         "api_key": "EMPTY",
-        "max_tokens": 8000,
+        "max_tokens": 2048,
         "max_workers": 32,
         "delay": 0.0,
     },
@@ -271,8 +275,14 @@ _API_RUNNER_MAP = {
 }
 
 
-def create_runner(model_key: str, tensor_parallel_size: int = 1) -> LLMRunner:
-    """Create a runner for the given model key."""
+def create_runner(model_key: str, tensor_parallel_size: int = 1,
+                  port: int = None) -> LLMRunner:
+    """Create a runner for the given model key.
+
+    Args:
+        port: Override the server port for OpenAI-compatible backends
+              (e.g., glm_server). Sets base_url to http://localhost:{port}/v1.
+    """
     if model_key not in MODEL_CONFIGS:
         raise ValueError(
             f"Unknown model '{model_key}'. Available: {list(MODEL_CONFIGS.keys())}"
@@ -294,10 +304,14 @@ def create_runner(model_key: str, tensor_parallel_size: int = 1) -> LLMRunner:
         "max_workers": config.get("max_workers", 2),
         "delay": config.get("delay", 1.0),
     }
-    if "base_url" in config:
+    if port is not None:
+        kwargs["base_url"] = f"http://localhost:{port}/v1"
+    elif "base_url" in config:
         kwargs["base_url"] = config["base_url"]
     if "api_key" in config:
         kwargs["api_key"] = config["api_key"]
     if "max_tokens" in config:
         kwargs["max_tokens"] = config["max_tokens"]
+    if "stop" in config:
+        kwargs["stop"] = config["stop"]
     return cls(**kwargs)
