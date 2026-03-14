@@ -179,11 +179,10 @@ def generate_code(
 
 
 def get_scenario_student_df(scenario, data_folder):
-    scenario_id = scenario[1:] if scenario.startswith("S") else scenario
     scenario_student_df = pd.read_csv(
         os.path.join(
             data_folder,
-            f"Scenario{scenario_id}_full_data.csv",
+            f"Scenario{scenario}_full_data.csv",
         ),
         dtype={"pass": str}
     )
