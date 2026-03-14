@@ -178,7 +178,8 @@ def generate_code(
     return rendered_codes
 
 
-def get_scenario_student_df(scenario_id, data_folder):
+def get_scenario_student_df(scenario, data_folder):
+    scenario_id = scenario[1:] if scenario.startswith("S") else scenario
     scenario_student_df = pd.read_csv(
         os.path.join(
             data_folder,

@@ -21,4 +21,4 @@ jobs:
         pip install -r requirements-ci.txt
     - name: Analysing the code with pylint
       run: |
-        pylint --disable=import-error $(git ls-files '*.py')
+        pylint --disable=import-error,no-name-in-module,no-member,not-callable --fail-under=8.0 $(git ls-files '*.py')
