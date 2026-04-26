@@ -195,7 +195,7 @@ class RSSMAdapter(ModelAdapter):
             n_questions,
             q_emb_dim=config.question_emb_dim,
             static_dim=config.question_static_dim,
-            hidden_dim=enc_dim,
+            enc_dim=enc_dim,
             dropout=dropout,
         ).to(device)
         gru = nn.GRU(
