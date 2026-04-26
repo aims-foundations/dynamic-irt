@@ -20,6 +20,7 @@ def get_adapter_registry() -> Dict[str, ModelAdapter]:
         DynamicIRTAdapter,
         EloAdapter,
         GPIRTAdapter,
+        LLMAdapter,
         RSSMAdapter,
     )
 
@@ -28,6 +29,7 @@ def get_adapter_registry() -> Dict[str, ModelAdapter]:
         "CIRT": CIRTAdapter(),
         "DynamicIRT": DynamicIRTAdapter(),
         "GPIRT": GPIRTAdapter(),
+        "LLM": LLMAdapter(),
         "RSSM": RSSMAdapter(),
     }
 

@@ -57,9 +57,12 @@ def load_unified_data(course_name: str = "dsa_hk231") -> UnifiedData:
     """
     # Load raw CSV
     csv_path = snapshot_download(
-        repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+        repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset",
+        local_files_only=True,
     )
-    main_data = pd.read_csv(f"{csv_path}/main_data.csv", low_memory=False)
+    main_data = pd.read_csv(
+        f"{csv_path}/main_data.csv", low_memory=False, on_bad_lines="skip"
+    )
     question_infos_csv = pd.read_csv(f"{csv_path}/question_infos.csv")
     course_infos = pd.read_csv(f"{csv_path}/course_infos.csv")
 
@@ -69,44 +72,52 @@ def load_unified_data(course_name: str = "dsa_hk231") -> UnifiedData:
     ].copy()
     main_data = main_data.dropna(subset=["pass"])
 
-    if course_name == "all":
-        # Build combined matrices from raw CSV
+    if course_name != "all":
+        course_row = course_infos[course_infos["course_name"] == course_name]
+        if len(course_row) > 0:
+            course_id = course_row["course_id"].values[0]
+            main_data = main_data[main_data["course_id"] == course_id].copy()
+
+    cache_dir = os.path.join(
+        os.path.dirname(__file__), "..", "..", ".cache", "matrices", course_name
+    )
+    cache_dir = os.path.abspath(cache_dir)
+
+    if os.path.exists(os.path.join(cache_dir, "correctness_matrix.pt")):
+        print(f"Loading cached matrices from {cache_dir}")
+        correctness = torch.load(
+            f"{cache_dir}/correctness_matrix.pt", map_location="cpu"
+        )
+        time_mat = torch.load(
+            f"{cache_dir}/time_matrix.pt", map_location="cpu"
+        )
+        question_infos = pd.read_csv(f"{cache_dir}/question_infos.csv")
+        student_info_path = f"{cache_dir}/student_info.csv"
+        if os.path.exists(student_info_path):
+            student_ids = pd.read_csv(student_info_path)["student_id"].tolist()
+        else:
+            student_ids = list(range(correctness.shape[0]))
+    else:
+        print(f"Building matrices from CSV for {course_name}...")
         repo_root = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "..")
         )
         sys.path.insert(0, os.path.join(repo_root, "data_collection"))
         from csv2matrices import build_matrices
 
-        result = build_matrices(main_data, question_infos_csv, "all", "cpu")
+        result = build_matrices(main_data, question_infos_csv, course_name, "cpu")
         student_info, question_info_list, correctness, time_mat, _ = result
         question_infos = pd.DataFrame(question_info_list)
         student_ids = [s["student_id"] for s in student_info]
-    else:
-        # Load pre-built tensors
-        mat_path = snapshot_download(
-            repo_id="stair-lab/code_insights_matrices", repo_type="dataset"
-        )
-        course_dir = f"{mat_path}/{course_name}"
-        correctness = torch.load(
-            f"{course_dir}/correctness_matrix.pt", map_location="cpu"
-        )
-        time_mat = torch.load(
-            f"{course_dir}/time_matrix.pt", map_location="cpu"
-        )
-        question_infos = pd.read_csv(f"{course_dir}/question_infos.csv")
 
-        # Try to load student IDs
-        student_info_path = f"{course_dir}/student_info.csv"
-        if os.path.exists(student_info_path):
-            student_ids = pd.read_csv(student_info_path)["student_id"].tolist()
-        else:
-            student_ids = list(range(correctness.shape[0]))
-
-        # Filter main_data to this course
-        course_row = course_infos[course_infos["course_name"] == course_name]
-        if len(course_row) > 0:
-            course_id = course_row["course_id"].values[0]
-            main_data = main_data[main_data["course_id"] == course_id].copy()
+        os.makedirs(cache_dir, exist_ok=True)
+        torch.save(correctness, f"{cache_dir}/correctness_matrix.pt")
+        torch.save(time_mat, f"{cache_dir}/time_matrix.pt")
+        question_infos.to_csv(f"{cache_dir}/question_infos.csv", index=False)
+        pd.DataFrame({"student_id": student_ids}).to_csv(
+            f"{cache_dir}/student_info.csv", index=False
+        )
+        print(f"Cached matrices to {cache_dir}")
 
     item_week = torch.tensor(
         question_infos["week"].fillna(0).astype(int).values, dtype=torch.long
