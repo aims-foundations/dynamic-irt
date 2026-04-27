@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -20,6 +20,13 @@ class PredictionResult:
     # Optional metadata for diagnostic breakdown
     student_indices: Optional[np.ndarray] = None
     item_indices: Optional[np.ndarray] = None
+
+    # Training diagnostics
+    losses: Optional[Dict[str, List[float]]] = None  # e.g. {"train": [...], "test": [...]}
+
+    # Learned parameter distributions (param_name -> 1D array of values)
+    student_params: Optional[Dict[str, np.ndarray]] = None
+    item_params: Optional[Dict[str, np.ndarray]] = None
 
     @property
     def n_observations(self) -> int:
