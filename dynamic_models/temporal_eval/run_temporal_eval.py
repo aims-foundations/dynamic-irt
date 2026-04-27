@@ -27,7 +27,9 @@ sys.path.insert(0, REPO_ROOT)
 from dynamic_irt.temporal_eval.harness import run_temporal_evaluation
 from dynamic_irt.temporal_eval.plot_results import (
     plot_concept_pair_scatter,
+    plot_loss_curves,
     plot_metrics_vs_horizon,
+    plot_param_distributions,
     plot_student_trajectories,
     plot_summary_table,
 )
@@ -94,6 +96,8 @@ def main():
         print("\nGenerating plots...")
         plot_metrics_vs_horizon(results_df, output_dir)
         plot_summary_table(results_df, output_dir)
+        plot_loss_curves(predictions, output_dir)
+        plot_param_distributions(predictions, output_dir)
         plot_student_trajectories(predictions, data, output_dir)
         plot_concept_pair_scatter(predictions, output_dir)
 

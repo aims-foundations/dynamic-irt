@@ -67,6 +67,7 @@ class DynamicIRTAdapter(ModelAdapter):
 
         optimizer = optim.Adam([theta0, theta_growth, beta], lr=lr)
 
+        train_losses = []
         for epoch in range(epochs):
             optimizer.zero_grad()
 
@@ -84,6 +85,11 @@ class DynamicIRTAdapter(ModelAdapter):
             ).mean()
             nll.backward()
             optimizer.step()
+            train_losses.append(nll.item())
+
+        theta0_np = theta0.detach().cpu().numpy()
+        growth_np = theta_growth.detach().cpu().numpy()
+        beta_np = beta.detach().cpu().numpy()
 
         # ---- Predict on test items ----
         test_corr = data.correctness_matrix[:, split.test_item_indices, :]
@@ -119,6 +125,14 @@ class DynamicIRTAdapter(ModelAdapter):
             y_pred_prob=y_pred_prob,
             student_indices=test_student_idx,
             item_indices=test_item_idx,
+            losses={"train": train_losses},
+            student_params={
+                "theta_0 (initial ability)": theta0_np,
+                "theta_growth (growth rate)": growth_np,
+            },
+            item_params={
+                "beta (difficulty)": beta_np,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:

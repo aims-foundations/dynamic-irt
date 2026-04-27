@@ -69,6 +69,7 @@ class CIRTAdapter(ModelAdapter):
 
         optimizer = optim.Adam([theta0, theta1, z_train], lr=lr)
 
+        train_losses = []
         for epoch in range(epochs):
             optimizer.zero_grad()
 
@@ -96,6 +97,12 @@ class CIRTAdapter(ModelAdapter):
             loss = nll + cost
             loss.backward()
             optimizer.step()
+            train_losses.append(loss.item())
+
+        # ---- Extract learned parameters ----
+        theta0_np = theta0.detach().cpu().numpy()
+        theta1_np = torch.sigmoid(theta1).detach().cpu().numpy()
+        z_np = z_train.detach().cpu().numpy()
 
         # ---- Predict on test items ----
         test_corr = data.correctness_matrix[:, split.test_item_indices, :]
@@ -135,6 +142,14 @@ class CIRTAdapter(ModelAdapter):
             y_pred_prob=y_pred_prob,
             student_indices=test_student_idx,
             item_indices=test_item_idx,
+            losses={"train": train_losses},
+            student_params={
+                "theta_0 (learning rate)": theta0_np,
+                "theta_1 (asymptotic ability)": theta1_np,
+            },
+            item_params={
+                "z (difficulty)": z_np,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:

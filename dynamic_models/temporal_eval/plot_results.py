@@ -1,12 +1,13 @@
 """Visualization of temporal evaluation results."""
 
 import os
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 from scipy import stats
 
 from .base_adapter import PredictionResult
@@ -208,6 +209,106 @@ def plot_student_trajectories(
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Plot saved: {save_path}")
+
+
+# ---------------------------------------------------------------------------
+# Loss curves
+# ---------------------------------------------------------------------------
+
+def plot_loss_curves(
+    predictions: Dict[Tuple[str, int], PredictionResult],
+    output_dir: str,
+):
+    """Plot training loss curves for each model (using the last horizon)."""
+    try:
+        from tueplots import bundles, figsizes
+        plt.rcParams.update(bundles.neurips2024())
+        fig_width = figsizes.neurips2024()["figure.figsize"][0]
+    except ImportError:
+        fig_width = 6.0
+
+    max_horizon = max(h for _, h in predictions.keys())
+    models_with_losses = {}
+    for (model, horizon), pred in predictions.items():
+        if horizon == max_horizon and pred.losses:
+            models_with_losses[model] = pred.losses
+
+    if not models_with_losses:
+        return
+
+    fig, ax = plt.subplots(figsize=(fig_width, 3.5))
+    for i, (model, losses) in enumerate(sorted(models_with_losses.items())):
+        color = COLORS[i % len(COLORS)]
+        train = losses.get("train", [])
+        if train:
+            ax.plot(train, color=color, label=model, linewidth=1.2, alpha=0.8)
+
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.set_title("Training Loss")
+    ax.legend(fontsize=7)
+    ax.grid(True, alpha=0.3)
+
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, "loss_curves.png")
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Plot saved: {save_path}")
+
+
+# ---------------------------------------------------------------------------
+# Parameter distribution histograms
+# ---------------------------------------------------------------------------
+
+def plot_param_distributions(
+    predictions: Dict[Tuple[str, int], PredictionResult],
+    output_dir: str,
+):
+    """Plot histogram + KDE for each learned parameter, one figure per model."""
+    try:
+        from tueplots import bundles, figsizes
+        plt.rcParams.update(bundles.neurips2024())
+        half_width = figsizes.neurips2024()["figure.figsize"][0] / 2
+    except ImportError:
+        half_width = 3.0
+
+    max_horizon = max(h for _, h in predictions.keys())
+    os.makedirs(output_dir, exist_ok=True)
+
+    for (model, horizon), pred in sorted(predictions.items()):
+        if horizon != max_horizon:
+            continue
+
+        all_params = {}
+        if pred.student_params:
+            all_params.update(pred.student_params)
+        if pred.item_params:
+            all_params.update(pred.item_params)
+
+        if not all_params:
+            continue
+
+        n_params = len(all_params)
+        fig, axes = plt.subplots(1, n_params, figsize=(half_width * n_params, 3.0))
+        if n_params == 1:
+            axes = [axes]
+
+        for ax, (param_name, values) in zip(axes, all_params.items()):
+            lo, hi = np.percentile(values, (1, 99))
+            clipped = values[(values >= lo) & (values <= hi)]
+            ax.hist(clipped, bins=30, density=True, alpha=0.3, color=COLORS[0])
+            sns.kdeplot(clipped, color=COLORS[0], linewidth=1.5, bw_adjust=0.5, ax=ax)
+            ax.set_xlabel(param_name, fontsize=7)
+            ax.set_ylabel("Density", fontsize=7)
+            ax.tick_params(labelsize=6)
+
+        fig.suptitle(f"{model} Parameter Distributions", fontsize=9)
+        fig.tight_layout()
+        safe_name = model.lower().replace(" ", "_")
+        save_path = os.path.join(output_dir, f"{safe_name}_params.png")
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Plot saved: {save_path}")
 
 
 # ---------------------------------------------------------------------------

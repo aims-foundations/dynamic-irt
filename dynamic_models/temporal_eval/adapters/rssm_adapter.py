@@ -301,6 +301,8 @@ class RSSMAdapter(ModelAdapter):
         best_state = None
         n_batches = (n_students + student_batch_size - 1) // student_batch_size
 
+        train_losses = []
+
         for epoch in range(epochs):
             ans_encoder.train()
             q_encoder.train()
@@ -346,6 +348,8 @@ class RSSMAdapter(ModelAdapter):
             avg_aux = total_aux / max(total_mask_count, 1)
             avg_loss = avg_bce + aux_loss_weight * avg_aux
 
+            train_losses.append(avg_loss)
+
             if avg_loss < best_loss:
                 best_loss = avg_loss
                 best_epoch = epoch
@@ -373,6 +377,11 @@ class RSSMAdapter(ModelAdapter):
             gru.load_state_dict(best_state["gru"])
             scorer.load_state_dict(best_state["scorer"])
             aux_predictor.load_state_dict(best_state["aux"])
+
+        # Extract question embedding norms as item parameter
+        with torch.no_grad():
+            q_emb_weights = q_encoder.q_embedding.weight.cpu().numpy()
+            q_emb_norms = np.linalg.norm(q_emb_weights, axis=1)
 
         # Inference — mini-batched, no gradients
         ans_encoder.eval()
@@ -443,6 +452,10 @@ class RSSMAdapter(ModelAdapter):
             y_pred_prob=y_pred_prob,
             student_indices=test_student_indices,
             item_indices=test_item_indices,
+            losses={"train": train_losses},
+            item_params={
+                "question embedding norm": q_emb_norms,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:

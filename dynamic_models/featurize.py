@@ -136,9 +136,9 @@ def remove_decimal_if_whole(val):
 def load_csv_data(course):
     """Download and load CSV data from HuggingFace."""
     path = snapshot_download(
-        repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+        repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
     )
-    main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False)
+    main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False, on_bad_lines="skip")
     question_infos = pd.read_csv(f"{path}/question_infos.csv")
 
     if course != "all":
