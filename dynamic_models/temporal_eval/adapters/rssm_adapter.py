@@ -59,8 +59,8 @@ class RSSMAdapter(ModelAdapter):
             default_device = "cpu"
         device = kwargs.get("device", default_device)
 
-        from dynamic_irt.featurize import FeatureConfig
-        from dynamic_irt.rssm import (
+        from dynamic_models.featurize import FeatureConfig
+        from dynamic_models.rssm import (
             AnswerEncoder,
             AuxDecoder as AnswerFeaturePredictor,
             Scorer as MultiModalScorer,
