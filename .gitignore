@@ -25,3 +25,4 @@ llm_simulator/results/
 llm_simulator/saves/
 llm_simulator/helm/
 results/
+.cache/
