@@ -337,8 +337,19 @@ def extract_features(main_data, question_to_idx, config):
     return answer_features, question_idxs, testcase_scores, student_idxs
 
 
+ALL_COURSES = ["dsa_hk231", "dsa_hk221", "pf_hk232", "pf_hk222"]
+
+
 def run_feature_mode(args):
     """Extract handcrafted multi-modal features from CSV."""
+    if args.course == "all":
+        for course in ALL_COURSES:
+            args_copy = argparse.Namespace(**vars(args))
+            args_copy.course = course
+            args_copy.output_dir = None
+            run_feature_mode(args_copy)
+        return
+
     config = FeatureConfig()
     output_dir = args.output_dir or f"data/multimodal/{args.course}"
 
@@ -565,7 +576,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default=None)
 
     # Feature mode args
-    parser.add_argument("--course", type=str, default="dsa_hk231",
+    parser.add_argument("--course", type=str, default="all",
                         help="Course name or 'all' (features mode)")
 
     # Embedding mode args

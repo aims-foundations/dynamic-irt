@@ -28,6 +28,9 @@ class PredictionResult:
     student_params: Optional[Dict[str, np.ndarray]] = None
     item_params: Optional[Dict[str, np.ndarray]] = None
 
+    # Serializable model state for saving/loading trained models
+    model_state: Optional[Dict] = None
+
     @property
     def n_observations(self) -> int:
         return len(self.y_true)

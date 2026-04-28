@@ -133,6 +133,12 @@ class DynamicIRTAdapter(ModelAdapter):
             item_params={
                 "beta (difficulty)": beta_np,
             },
+            model_state={
+                "theta0": theta0.detach().cpu(),
+                "theta_growth": theta_growth.detach().cpu(),
+                "beta": beta.detach().cpu(),
+                "epochs": epochs,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:

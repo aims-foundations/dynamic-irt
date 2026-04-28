@@ -127,6 +127,11 @@ class EloAdapter(ModelAdapter):
             item_params={
                 "difficulty": difficulty_values,
             },
+            model_state={
+                "theta": dict(theta),
+                "difficulty": dict(difficulty),
+                "K": K,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:

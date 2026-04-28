@@ -43,15 +43,21 @@ class RSSMAdapter(ModelAdapter):
         dropout: float = 0.2,
         lr: float = 1e-3,
         weight_decay: float = 1e-4,
-        epochs: int = 1500,
-        patience: int = 200,
+        epochs: int = 500,
+        patience: int = 100,
         grad_clip: float = 1.0,
         aux_loss_weight: float = 0.1,
         **kwargs,
     ) -> PredictionResult:
         torch.manual_seed(seed)
         np.random.seed(seed)
-        device = kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            default_device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            default_device = "mps"
+        else:
+            default_device = "cpu"
+        device = kwargs.get("device", default_device)
 
         from dynamic_irt.featurize import FeatureConfig
         from dynamic_irt.rssm import (
@@ -130,7 +136,7 @@ class RSSMAdapter(ModelAdapter):
             test_seqs.append((test_feats, test_qidxs, test_tcs))
 
         n_students = len(train_seqs)
-        max_seq_cap = kwargs.get("max_seq_len", 1000)
+        max_seq_cap = kwargs.get("max_seq_len", 600)
         for i in range(len(train_seqs)):
             feats, qidxs, tcs = train_seqs[i]
             if len(feats) > max_seq_cap:
@@ -187,7 +193,7 @@ class RSSMAdapter(ModelAdapter):
         ).to(device)
 
         print(f"    RSSM data: {n_students} students, "
-              f"train_len={max_train}, test_len={max_test}")
+              f"train_len={max_train}, test_len={max_test}, device={device}", flush=True)
 
         # Build model components separately for batched processing
         ans_encoder = AnswerEncoder(answer_dim, enc_dim, dropout=dropout).to(device)
@@ -363,12 +369,12 @@ class RSSMAdapter(ModelAdapter):
 
             if epoch - best_epoch >= patience:
                 print(f"    RSSM early stop at epoch {epoch} "
-                      f"(best={best_loss:.4f}@{best_epoch})")
+                      f"(best={best_loss:.4f}@{best_epoch})", flush=True)
                 break
 
-            if epoch % 100 == 0:
+            if epoch % 50 == 0:
                 print(f"    RSSM epoch {epoch}: loss={avg_loss:.4f} "
-                      f"(best={best_loss:.4f}@{best_epoch})")
+                      f"(best={best_loss:.4f}@{best_epoch})", flush=True)
 
         # Restore best model
         if best_state is not None:
@@ -456,7 +462,18 @@ class RSSMAdapter(ModelAdapter):
             item_params={
                 "question embedding norm": q_emb_norms,
             },
+            model_state={
+                "ans_encoder": ans_encoder.state_dict(),
+                "q_encoder": q_encoder.state_dict(),
+                "gru": gru.state_dict(),
+                "scorer": scorer.state_dict(),
+                "aux_predictor": aux_predictor.state_dict(),
+                "hidden_dim": hidden_dim,
+                "enc_dim": enc_dim,
+                "n_questions": n_questions,
+                "best_epoch": best_epoch,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:
-        return 15.0
+        return 30.0

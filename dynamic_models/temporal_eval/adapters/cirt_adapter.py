@@ -150,6 +150,13 @@ class CIRTAdapter(ModelAdapter):
             item_params={
                 "z (difficulty)": z_np,
             },
+            model_state={
+                "theta0": theta0.detach().cpu(),
+                "theta1": theta1.detach().cpu(),
+                "z_train": z_train.detach().cpu(),
+                "concentration": concentration,
+                "epochs": epochs,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:

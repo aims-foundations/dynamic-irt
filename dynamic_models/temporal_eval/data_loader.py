@@ -44,7 +44,7 @@ class UnifiedData:
     course_name: str = ""
 
 
-def load_unified_data(course_name: str = "dsa_hk231") -> UnifiedData:
+def load_unified_data(course_name: str = "all") -> UnifiedData:
     """Load all data from HuggingFace.
 
     Args:
