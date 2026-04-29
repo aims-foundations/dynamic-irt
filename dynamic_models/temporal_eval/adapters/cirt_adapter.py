@@ -52,7 +52,7 @@ class CIRTAdapter(ModelAdapter):
         valid_mask = (y_flat != -1).numpy()
         valid_indices = np.where(valid_mask)[0]
 
-        t_vals = np.linspace(1, T, T)
+        t_vals = np.linspace(1, T, T, dtype=np.float32)
         student_idx_np = valid_indices // (Q_train * T)
         # question_idx is local to train items (0..Q_train-1)
         question_idx_np = (valid_indices // T) % Q_train

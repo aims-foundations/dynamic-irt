@@ -16,8 +16,8 @@ import sys
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO_ROOT)
 
-from dynamic_irt.temporal_eval.harness import load_saved_results, run_temporal_evaluation
-from dynamic_irt.temporal_eval.plot_results import (
+from dynamic_models.temporal_eval.harness import load_saved_results, run_temporal_evaluation
+from dynamic_models.temporal_eval.plot_results import (
     plot_concept_pair_scatter,
     plot_loss_curves,
     plot_metrics_vs_horizon,

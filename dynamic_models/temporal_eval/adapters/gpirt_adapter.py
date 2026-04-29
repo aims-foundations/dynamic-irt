@@ -39,7 +39,7 @@ class GPIRTAdapter(ModelAdapter):
         np.random.seed(seed)
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        from dynamic_irt.gpirt import preprocess
+        from dynamic_models.gpirt import preprocess
 
         # Mask test items in both correctness and time matrices
         # Both must be masked so preprocess() builds consistent indexes
@@ -66,7 +66,7 @@ class GPIRTAdapter(ModelAdapter):
 
         # Build model adapter with testlet effects for better mixing
         if testlet:
-            from dynamic_irt.gpirt import GPIRTTestletModelAdapter
+            from dynamic_models.gpirt import GPIRTTestletModelAdapter
 
             qi = data.question_infos
             item_to_question = torch.tensor(
@@ -76,14 +76,14 @@ class GPIRTAdapter(ModelAdapter):
                 masked_corr, all_indexes, device, item_to_question,
             )
         else:
-            from dynamic_irt.gpirt import GPIRTModelAdapter
+            from dynamic_models.gpirt import GPIRTModelAdapter
 
             model_adapter = GPIRTModelAdapter(
                 masked_corr, all_indexes, device,
             )
 
         # Run blocked ESS inference
-        from dynamic_irt.gpirt import BlockedGibbsESSampler
+        from dynamic_models.gpirt import BlockedGibbsESSampler
 
         total_draws = n_samples + warmup
         sampler = BlockedGibbsESSampler(model_adapter, device=device)

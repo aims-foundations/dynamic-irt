@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from dynamic_irt.featurize import CONFIGS, EmbeddingConfig, FeatureConfig
+from dynamic_models.featurize import CONFIGS, EmbeddingConfig, FeatureConfig
 
 
 # ---------------------------------------------------------------------------

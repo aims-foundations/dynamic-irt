@@ -276,26 +276,25 @@ class RSSMAdapter(ModelAdapter):
             if not training:
                 return scores, h_final
 
-            # BCE loss on valid testcases
-            tc_valid = tc_b != -1
+            # BCE loss on valid testcases (masked reduction to avoid MPS boolean indexing bugs)
+            tc_valid = (tc_b != -1).float()
             n_valid_tc = tc_valid.sum().item()
             if n_valid_tc > 0:
-                bce_loss = F.binary_cross_entropy(
-                    scores[tc_valid], tc_b[tc_valid], reduction="sum"
+                bce_per_elem = F.binary_cross_entropy(
+                    scores, tc_b.clamp(0, 1), reduction="none"
                 )
+                bce_loss = (bce_per_elem * tc_valid).sum()
             else:
                 bce_loss = torch.tensor(0.0, device=device)
 
-            # Auxiliary feature prediction loss
+            # Auxiliary feature prediction loss (masked reduction)
             feat_hat = aux_predictor(
                 hidden_out.reshape(BT, hidden_dim)
             ).reshape(B, T, answer_dim)
-            valid = mask_b.unsqueeze(-1).expand_as(feat_hat)
+            valid = mask_b.unsqueeze(-1).expand_as(feat_hat).float()
             n_valid_mask = valid.sum().item()
             if n_valid_mask > 0:
-                aux_loss = F.mse_loss(
-                    feat_hat[valid], feat_b[valid], reduction="sum"
-                )
+                aux_loss = ((feat_hat - feat_b) ** 2 * valid).sum()
             else:
                 aux_loss = torch.tensor(0.0, device=device)
 
