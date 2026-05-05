@@ -28,7 +28,7 @@ METRIC_LABELS = {
 def plot_metrics_vs_horizon(results_df: pd.DataFrame, output_dir: str):
     """Line plots: metric (y) vs cutoff week (x), one line per model.
 
-    Creates one subplot per metric.
+    If results contain multiple courses, plots mean +/- std error bands.
     """
     try:
         from tueplots import bundles
@@ -36,7 +36,9 @@ def plot_metrics_vs_horizon(results_df: pd.DataFrame, output_dir: str):
     except ImportError:
         pass
 
-    metrics = [m for m in ["auc", "accuracy", "f1", "log_likelihood", "rmse"]
+    multi_course = "course" in results_df.columns and results_df["course"].nunique() > 1
+
+    metrics = [m for m in ["log_likelihood"]
                if m in results_df["metric"].values]
 
     if not metrics:
@@ -54,21 +56,23 @@ def plot_metrics_vs_horizon(results_df: pd.DataFrame, output_dir: str):
         for i, model in enumerate(models):
             subset = results_df[
                 (results_df["model"] == model) & (results_df["metric"] == metric)
-            ].sort_values("horizon")
+            ]
 
             if len(subset) == 0:
                 continue
 
             color = COLORS[i % len(COLORS)]
-            ax.plot(
-                subset["horizon"],
-                subset["value"],
-                "o-",
-                color=color,
-                label=model,
-                linewidth=1.5,
-                markersize=4,
-            )
+
+            if multi_course:
+                grouped = subset.groupby("horizon")["value"]
+                means = grouped.mean().sort_index()
+                sems = grouped.sem().sort_index()
+                ax.plot(means.index, means.values, "o-", color=color,
+                        label=model, linewidth=1.5, markersize=4)
+            else:
+                subset = subset.sort_values("horizon")
+                ax.plot(subset["horizon"], subset["value"], "o-", color=color,
+                        label=model, linewidth=1.5, markersize=4)
 
         ax.set_xlabel("Train Cutoff Week")
         ax.set_ylabel(METRIC_LABELS.get(metric, metric))
@@ -105,16 +109,30 @@ def plot_summary_table(results_df: pd.DataFrame, output_dir: str):
 # Student trajectory plots (ported from compare_growth.py)
 # ---------------------------------------------------------------------------
 
+def _aggregate_by_question(y_values, student_indices, item_indices, student_id):
+    """Aggregate test-case-level values to question-level means for one student.
+
+    Returns arrays of (question_indices_sorted, mean_values) ordered by question index.
+    """
+    mask = student_indices == student_id
+    items = item_indices[mask]
+    values = y_values[mask]
+    unique_items = np.unique(items)
+    q_means = np.array([values[items == q].mean() for q in unique_items])
+    order = np.argsort(unique_items)
+    return unique_items[order], q_means[order]
+
+
 def plot_student_trajectories(
     predictions: Dict[Tuple[str, int], PredictionResult],
     data: UnifiedData,
     output_dir: str,
     n_students: int = 5,
 ):
-    """Plot predicted vs actual trajectories per student, one line per model.
+    """Plot predicted vs actual trajectories per student, aggregated to question level.
 
-    Uses the last (largest) horizon. For each model, groups y_pred_prob by
-    student_indices and plots against the actual outcomes (smoothed).
+    Uses the last (largest) horizon. For each model, groups predictions by
+    (student, question) and plots the mean P(correct) per question.
     """
     try:
         from tueplots import bundles, figsizes
@@ -127,81 +145,86 @@ def plot_student_trajectories(
         print("No predictions available for trajectory plots.")
         return
 
-    # Find the last horizon and collect models that have predictions there
     max_horizon = max(h for _, h in predictions.keys())
     model_preds = {}
     for (model, horizon), pred in predictions.items():
-        if horizon == max_horizon and pred.student_indices is not None:
+        if horizon == max_horizon and pred.student_indices is not None and pred.item_indices is not None:
             model_preds[model] = pred
 
     if not model_preds:
-        print("No models with student_indices at last horizon — skipping trajectories.")
+        print("No models with student/item indices at last horizon — skipping trajectories.")
         return
 
-    # Pick a reference model to select students (use the one with most predictions)
     ref_model = max(model_preds, key=lambda m: len(model_preds[m].y_true))
     ref_pred = model_preds[ref_model]
 
-    # Find students with most test observations
+    # Count unique questions per student (not raw test cases)
     unique_students = np.unique(ref_pred.student_indices)
-    student_counts = {
-        s: np.sum(ref_pred.student_indices == s) for s in unique_students
-    }
-    top_students = sorted(student_counts, key=student_counts.get, reverse=True)[:n_students]
+    student_question_counts = {}
+    for s in unique_students:
+        n_questions = len(np.unique(ref_pred.item_indices[ref_pred.student_indices == s]))
+        student_question_counts[s] = n_questions
 
-    if not top_students:
+    # Pick students with a good spread of question counts (not just the max)
+    sorted_students = sorted(student_question_counts, key=student_question_counts.get, reverse=True)
+    # Take from different quartiles for diversity
+    n_available = len(sorted_students)
+    if n_available <= n_students:
+        selected = sorted_students
+    else:
+        indices = np.linspace(0, n_available - 1, n_students, dtype=int)
+        selected = [sorted_students[i] for i in indices]
+
+    if not selected:
         print("No students found for trajectory plot.")
         return
 
-    n_rows = len(top_students)
-    fig, axes = plt.subplots(n_rows, 1, figsize=(fig_width, 2.0 * n_rows), sharex=False)
+    n_rows = len(selected)
+    fig, axes = plt.subplots(n_rows, 1, figsize=(fig_width, 2.2 * n_rows), sharex=False)
     if n_rows == 1:
         axes = [axes]
 
-    for ax, sidx in zip(axes, top_students):
-        # Plot actual outcomes (from reference model's y_true)
-        mask = ref_pred.student_indices == sidx
-        y_actual = ref_pred.y_true[mask].astype(np.float32)
-        x_axis = np.arange(len(y_actual))
+    for ax, sidx in zip(axes, selected):
+        # Aggregate actual outcomes to question level
+        q_ids, q_actual = _aggregate_by_question(
+            ref_pred.y_true.astype(np.float32),
+            ref_pred.student_indices, ref_pred.item_indices, sidx
+        )
+        x_axis = np.arange(len(q_ids))
 
-        if len(y_actual) < 3:
+        if len(q_actual) < 3:
             continue
 
-        # Raw observations as faint dots
-        ax.scatter(x_axis, y_actual, color="gray", alpha=0.12, s=4, zorder=1)
+        # Actual question-level scores as dots
+        ax.scatter(x_axis, q_actual, color="black", alpha=0.3, s=10,
+                   zorder=1, label="Actual (per question)")
 
-        # Smoothed actual (rolling mean)
-        window = max(5, len(y_actual) // 8)
-        y_smoothed = (
-            pd.Series(y_actual).rolling(window, min_periods=1, center=True).mean().values
-        )
-        ax.plot(x_axis, y_smoothed, color="black", linewidth=1.5, alpha=0.5,
-                label="Actual (smoothed)", zorder=2)
-
-        # Plot each model's predictions for this student
+        # Plot each model's question-level predictions
         for i, (model_name, pred) in enumerate(sorted(model_preds.items())):
-            m_mask = pred.student_indices == sidx
-            if m_mask.sum() == 0:
+            if pred.item_indices is None:
                 continue
-            y_pred = pred.y_pred_prob[m_mask]
-            x_pred = np.arange(len(y_pred))
+            mq_ids, mq_preds = _aggregate_by_question(
+                pred.y_pred_prob, pred.student_indices, pred.item_indices, sidx
+            )
+            # Align to reference question ordering
+            mx = np.arange(len(mq_ids))
             color = COLORS[i % len(COLORS)]
-            ax.plot(x_pred, y_pred, color=color, linewidth=1.0, alpha=0.7,
+            ax.plot(mx, mq_preds, color=color, linewidth=1.2, alpha=0.8,
                     label=model_name, zorder=3)
 
-        # Resolve student label
         if sidx < len(data.student_ids):
             student_label = data.student_ids[sidx]
         else:
             student_label = sidx
+        n_q = len(q_ids)
         ax.set_ylabel(r"$P(\mathrm{correct})$", fontsize=7)
-        ax.set_title(f"Student {student_label} (n={len(y_actual)})", fontsize=7, pad=2)
+        ax.set_title(f"Student {student_label} ({n_q} questions)", fontsize=7, pad=2)
         ax.set_ylim(-0.05, 1.05)
         ax.tick_params(labelsize=6)
         ax.grid(True, alpha=0.2)
 
     axes[0].legend(fontsize=5, loc="lower right", ncol=2)
-    axes[-1].set_xlabel("Test observation index")
+    axes[-1].set_xlabel("Question index (ordered)")
     fig.tight_layout(h_pad=0.8)
 
     os.makedirs(output_dir, exist_ok=True)

@@ -23,6 +23,7 @@ def get_adapter_registry() -> Dict[str, ModelAdapter]:
         GPIRTAdapter,
         LLMAdapter,
         RSSMAdapter,
+        RSSMFullAdapter,
     )
 
     return {
@@ -32,6 +33,7 @@ def get_adapter_registry() -> Dict[str, ModelAdapter]:
         "GPIRT": GPIRTAdapter(),
         "LLM": LLMAdapter(),
         "RSSM": RSSMAdapter(),
+        "RSSMFull": RSSMFullAdapter(),
     }
 
 

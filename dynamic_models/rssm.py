@@ -130,6 +130,49 @@ class Scorer(nn.Module):
         return self._predictor(self._scorer(x))
 
 
+class PosteriorNet(nn.Module):
+    """q(z_t | h_t, e_t): infers discrete latent from hidden state + answer encoding."""
+
+    def __init__(self, hidden_dim, enc_dim, n_vars=16, n_classes=16):
+        super().__init__()
+        self.n_vars = n_vars
+        self.n_classes = n_classes
+        self._mlp = nn.Sequential(
+            nn.Linear(hidden_dim + enc_dim, hidden_dim),
+            nn.ELU(),
+            nn.Linear(hidden_dim, n_vars * n_classes),
+        )
+
+    def forward(self, h, e):
+        x = torch.cat([h, e], dim=-1)
+        logits = self._mlp(x).reshape(*h.shape[:-1], self.n_vars, self.n_classes)
+        probs = F.softmax(logits, dim=-1)
+        one_hot = F.one_hot(probs.argmax(dim=-1), self.n_classes).float()
+        z = one_hot + probs - probs.detach()
+        return z, probs
+
+
+class PriorNet(nn.Module):
+    """p(z_t | h_t): predicts discrete latent from hidden state."""
+
+    def __init__(self, input_dim, n_vars=16, n_classes=16, hidden_dim=128):
+        super().__init__()
+        self.n_vars = n_vars
+        self.n_classes = n_classes
+        self._mlp = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ELU(),
+            nn.Linear(hidden_dim, n_vars * n_classes),
+        )
+
+    def forward(self, x):
+        logits = self._mlp(x).reshape(*x.shape[:-1], self.n_vars, self.n_classes)
+        probs = F.softmax(logits, dim=-1)
+        one_hot = F.one_hot(probs.argmax(dim=-1), self.n_classes).float()
+        z = one_hot + probs - probs.detach()
+        return z, probs
+
+
 class AuxDecoder(nn.Module):
     """Auxiliary decoder: predicts next timestep's answer representation."""
 
