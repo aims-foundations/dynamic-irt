@@ -145,7 +145,7 @@ def plot_progression():
 
     # === Score progression with individual student trajectories ===
     for metric in METRICS:
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
         for idx, (group_name, year_courses) in enumerate(COURSE_GROUPS.items()):
             ax = axes[idx]
@@ -164,7 +164,7 @@ def plot_progression():
                 ).mean().values
 
                 np.random.seed(42)
-                sample_idx = np.random.choice(len(sequences), min(150, len(sequences)), replace=False)
+                sample_idx = np.random.choice(len(sequences), min(50, len(sequences)), replace=False)
                 for i in sample_idx:
                     _, seq = sequences[i]
                     sx = np.arange(1, len(seq) + 1)
@@ -178,11 +178,12 @@ def plot_progression():
 
             ax.set_xlabel("Student's $n$-th Problem (chronological)")
             ax.set_ylabel("Marks")
-            ax.set_title(f"{group_name} -- {METRIC_LABELS[metric]}")
-            ax.legend(loc="upper right")
+            ax.set_title(f"{group_name} -- {METRIC_LABELS[metric]}", fontsize=10)
             ax.set_ylim(0, 10)
 
-        plt.tight_layout()
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=2, fontsize=8, bbox_to_anchor=(0.5, 1.0))
+        fig.tight_layout(rect=[0, 0, 1, 0.93])
         out = os.path.join(OUTPUT_DIR, f"progression_{metric}.png")
         plt.savefig(out, dpi=300, bbox_inches="tight")
         plt.close()

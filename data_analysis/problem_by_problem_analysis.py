@@ -59,8 +59,8 @@ def load_data_from_huggingface(course_name: str = None) -> tuple[pd.DataFrame, p
     """
     # Try local cache first
     cache_path = os.path.expanduser(
-        "~/.cache/huggingface/hub/datasets--stair-lab--code_insights_csv/"
-        "snapshots/99d53fe7c11f6302fb28b82fab5ebd77c00e5d12"
+        "~/.cache/huggingface/hub/datasets--CodeInsightTeam--code_insights_csv/"
+        "snapshots/a88c99da850ddd26e2f4612b5147eb9efead9aa9"
     )
 
     if os.path.exists(cache_path):
@@ -75,7 +75,7 @@ def load_data_from_huggingface(course_name: str = None) -> tuple[pd.DataFrame, p
             repo_id="stair-lab/code_insights_csv", repo_type="dataset"
         )
 
-    main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False)
+    main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False, on_bad_lines="skip")
     question_infos = pd.read_csv(f"{path}/question_infos.csv")
     course_infos = pd.read_csv(f"{path}/course_infos.csv")
 
@@ -185,25 +185,26 @@ def process_dataframe(df: pd.DataFrame, df_name: str) -> pd.DataFrame:
 
     For each student (id), compute:
     - max_step: Maximum step number reached
-    - max_marks: Maximum marks achieved
+    - last_marks: Marks on the last attempt (by step number)
 
     Then aggregate across all students to get:
     - mean_step: Average of max steps
-    - mean_marks: Average of max marks
-    - max_marks: Maximum marks across all students
+    - mean_marks: Average of last-attempt marks
+    - max_marks: Maximum last-attempt marks across all students
     - n: Number of students with marks > 0
     """
     # Filter out NA ids
     df_filtered = df[df['id'].notna()].copy()
 
-    # Group by id and summarize
+    # Group by id and summarize: use last attempt marks (highest step number)
     summary = df_filtered.groupby('id').agg(
         max_step=('step', lambda x: x.max() if x.notna().any() else np.nan),
-        max_marks=('marks', lambda x: x.max() if x.notna().any() else np.nan)
+        max_marks=('marks', lambda x: x.max() if x.notna().any() else np.nan),
+        last_marks=('marks', 'last')
     ).reset_index()
 
-    # Filter to students with marks > 0
-    summary = summary[summary['max_marks'] > 0]
+    # Remove rows with NaN marks
+    summary = summary.dropna(subset=['last_marks'])
 
     if len(summary) == 0:
         return pd.DataFrame({
@@ -214,12 +215,12 @@ def process_dataframe(df: pd.DataFrame, df_name: str) -> pd.DataFrame:
             'n': [0]
         })
 
-    # Calculate overall statistics
+    # Calculate overall statistics (use last_marks for scores)
     result = pd.DataFrame({
         'dataframe': [df_name],
         'mean_step': [round(summary['max_step'].mean(), 0)],
-        'mean_marks': [round(summary['max_marks'].mean(), 3)],
-        'max_marks': [summary['max_marks'].max()],
+        'mean_marks': [round(summary['last_marks'].mean(), 3)],
+        'max_marks': [summary['last_marks'].max()],
         'n': [len(summary)]
     })
 
@@ -335,7 +336,7 @@ def analyze_and_plot_dataframe(df: pd.DataFrame, df_name: str, output_dir: str =
     summarized = df_filtered.groupby('id').agg(
         max_step=('step', 'max'),
         mean_edit_distance=('edit_distance', 'mean') if 'edit_distance' in df_filtered.columns else ('step', lambda x: np.nan),
-        marks=('marks', 'max')
+        marks=('marks', 'last')
     ).reset_index()
 
     # Filter to students with marks > 0
@@ -451,7 +452,7 @@ def main():
         summarized = df_filtered.groupby('id').agg(
             max_step=('step', 'max'),
             mean_edit_distance=('edit_distance', 'mean') if 'edit_distance' in df_filtered.columns else ('step', lambda x: np.nan),
-            marks=('marks', 'max')
+            marks=('marks', 'last')
         ).reset_index()
         summarized = summarized[summarized['marks'] > 0]
 
@@ -544,6 +545,33 @@ def main():
 
     # Don't use tight_layout with colorbar - use bbox_inches='tight' instead
     output_path = os.path.join(OUTPUT_DIR, f"aggregate_problem_patterns_{output_prefix}.png")
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {output_path}")
+
+    # Create 2x1 vertical figure: steps histogram + score histogram
+    fig, axes = plt.subplots(2, 1, figsize=(4, 6))
+
+    # Left: Distribution of mean steps across problems (integer-width bins)
+    step_data = final_summary['mean_step'].dropna()
+    step_bins = range(int(step_data.min()), int(step_data.max()) + 2)
+    axes[0].hist(step_data, bins=step_bins, edgecolor='black', alpha=0.7)
+    axes[0].axvline(final_summary['mean_step'].mean(), color='red', linestyle='--',
+                    label=f"Mean: {final_summary['mean_step'].mean():.1f}")
+    axes[0].set_xlabel('Average Steps per Problem')
+    axes[0].set_ylabel('Number of Problems')
+    axes[0].legend()
+
+    # Right: Distribution of mean marks (score) across problems
+    axes[1].hist(final_summary['mean_marks'].dropna(), bins=30, edgecolor='black', alpha=0.7)
+    axes[1].axvline(final_summary['mean_marks'].mean(), color='red', linestyle='--',
+                    label=f"Mean: {final_summary['mean_marks'].mean():.3f}")
+    axes[1].set_xlabel('Average Score per Problem')
+    axes[1].set_ylabel('Number of Problems')
+    axes[1].legend()
+
+    plt.tight_layout()
+    output_path = os.path.join(OUTPUT_DIR, f"aggregate_problem_patterns_left_{output_prefix}.png")
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {output_path}")

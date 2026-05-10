@@ -68,7 +68,7 @@ def main():
     ).cumcount() + 1
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     x = np.arange(1, MAX_ATTEMPTS + 1)
 
     for idx, (group_name, year_courses) in enumerate(COURSE_GROUPS.items()):
@@ -104,11 +104,12 @@ def main():
         ax.set_xlabel("Attempts")
         ax.set_ylabel("Marks")
         ax.set_title(f"{group_name} Courses")
-        ax.legend(loc="lower right")
         ax.set_xlim(1, MAX_ATTEMPTS)
         ax.set_ylim(0, 10)
 
-    plt.tight_layout()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2, fontsize=8, bbox_to_anchor=(0.5, 1.0))
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
     out = os.path.join(OUTPUT_DIR, "learning_curves_by_year.png")
     plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()

@@ -49,7 +49,7 @@ def per_course_metrics_plot(df, output_dir):
     metrics = [("log_likelihood", "Log-Likelihood ↑"), ("auc", "AUC ↑")]
     models = sorted(df["model"].unique())
 
-    fig, axes = plt.subplots(1, 2, figsize=(9, 3.5))
+    fig, axes = plt.subplots(2, 1, figsize=(4, 6))
 
     lines = []
     labels = []

@@ -586,7 +586,7 @@ def inv5_broad_patterns(merged_enriched, q_merged, q_info):
 
 def fig_aggregate_vs_pairwise(merged, q_merged):
     """Scatter: question-level aggregate (Spearman) + student-question pair (Pearson)."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(2, 1, figsize=(5, 8))
 
     # Left: question-level aggregate
     ax = axes[0]
@@ -646,7 +646,7 @@ def fig_correlation_histograms(merged):
         question_stats.append({"question_unittest_id": qid, "r": r})
     qa = pd.DataFrame(question_stats)
 
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    fig, axes = plt.subplots(2, 1, figsize=(3.5, 4.5))
 
     ax = axes[0]
     ax.hist(sa["r"], bins=40, color="#4C72B0", alpha=0.8, edgecolor="white")
@@ -715,30 +715,29 @@ def fig_kendall_tau(merged, q_merged):
     ax.hist(st["tau"], bins=40, color="#6A9B59", alpha=0.8, edgecolor="white")
     ax.axvline(0, color="red", linestyle="--", linewidth=1.5, label=r"$\tau$ = 0")
     ax.axvline(st["tau"].mean(), color="orange", linestyle="-", linewidth=1.5,
-               label=fr"Mean = {st['tau'].mean():.3f}")
+               label="Mean")
     ax.set_xlabel(r"Per-Student Kendall $\tau$")
     ax.set_ylabel("Number of Students")
-    ax.set_title("Per-Student Rank Correlation")
-    ax.legend(fontsize=9)
+    ax.set_title(fr"Per-Student (mean = {st['tau'].mean():.3f})")
 
     ax = axes[1]
     ax.hist(qt["tau"], bins=30, color="#6A9B59", alpha=0.8, edgecolor="white")
-    ax.axvline(0, color="red", linestyle="--", linewidth=1.5, label=r"$\tau$ = 0")
-    ax.axvline(qt["tau"].mean(), color="orange", linestyle="-", linewidth=1.5,
-               label=fr"Mean = {qt['tau'].mean():.3f}")
+    ax.axvline(0, color="red", linestyle="--", linewidth=1.5)
+    ax.axvline(qt["tau"].mean(), color="orange", linestyle="-", linewidth=1.5)
     ax.set_xlabel(r"Per-Question Kendall $\tau$")
     ax.set_ylabel("Number of Questions")
-    ax.set_title("Per-Question Rank Correlation")
-    ax.legend(fontsize=9)
+    ax.set_title(fr"Per-Question (mean = {qt['tau'].mean():.3f})")
 
-    fig.tight_layout()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2, fontsize=8, bbox_to_anchor=(0.5, 1.0))
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
     path = os.path.join(OUT_DIR, "kendall_tau_histograms.png")
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved {path}")
 
     # --- Figure 2: Aggregate scatter with tau annotations ---
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
+    fig, axes = plt.subplots(2, 1, figsize=(3.5, 4.5))
 
     ax = axes[0]
     ax.scatter(q_merged["sim_mean_score"], q_merged["real_mean_score"],
@@ -847,20 +846,18 @@ def fig_kendall_tau_decomposition(merged):
     ax.set_xlabel(r"Per-Student Kendall $\tau$")
     ax.set_ylabel("Number of Students")
     ax.set_title("Remove Question Difficulty")
-    ax.legend(fontsize=8)
 
     ax = axes[1]
-    ax.hist(orig_q_taus, bins=30, alpha=0.6, color="#6A9B59", edgecolor="white",
-            label=fr"Original (mean={orig_q_taus.mean():.3f})")
-    ax.hist(centered_q_taus, bins=30, alpha=0.6, color="#C44E52", edgecolor="white",
-            label=fr"Centered (mean={centered_q_taus.mean():.3f})")
+    ax.hist(orig_q_taus, bins=30, alpha=0.6, color="#6A9B59", edgecolor="white")
+    ax.hist(centered_q_taus, bins=30, alpha=0.6, color="#C44E52", edgecolor="white")
     ax.axvline(0, color="black", linestyle="--", linewidth=1, alpha=0.5)
     ax.set_xlabel(r"Per-Question Kendall $\tau$")
     ax.set_ylabel("Number of Questions")
     ax.set_title("Remove Student Ability")
-    ax.legend(fontsize=8)
 
-    fig.tight_layout()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=1, fontsize=7, bbox_to_anchor=(0.5, 1.0))
+    fig.tight_layout(rect=[0, 0, 1, 0.92])
     path = os.path.join(OUT_DIR, "kendall_tau_decomposition.png")
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -1079,7 +1076,7 @@ def fig_central_tendency(merged):
     )
     m["difficulty"] = m["question_unittest_id"].map(q_tier_map)
 
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    fig, axes = plt.subplots(2, 1, figsize=(4, 5.5))
     w = 0.35
 
     tiers = ["Low", "Mid", "High"]
@@ -1094,7 +1091,6 @@ def fig_central_tendency(merged):
     axes[0].set_title("By student ability")
     axes[0].set_xticks(x)
     axes[0].set_xticklabels([f"{t}\n(n={c:,})" for t, c in zip(tiers, counts)])
-    axes[0].legend(frameon=False)
     axes[0].set_ylim(0, 0.85)
     for bar, val in zip(bars1, true_means):
         axes[0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
@@ -1115,7 +1111,6 @@ def fig_central_tendency(merged):
     axes[1].set_title("By question difficulty")
     axes[1].set_xticks(x2)
     axes[1].set_xticklabels([f"{t}\n(n={c:,})" for t, c in zip(diff_tiers, counts_d)])
-    axes[1].legend(frameon=False)
     axes[1].set_ylim(0, 0.95)
     for bar, val in zip(bars3, true_d):
         axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
@@ -1124,8 +1119,10 @@ def fig_central_tendency(merged):
         axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
                      f"{val:.2f}", ha="center", va="bottom", fontsize=9)
 
-    plt.tight_layout()
-    out_path = os.path.join(OUT_DIR, "overconfidence_by_ability_and_difficulty.png")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2, fontsize=8, frameon=False, bbox_to_anchor=(0.5, 1.0))
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    out_path = os.path.join(OUT_DIR, "central_tendency_bias.png")
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"  Saved {out_path}")

@@ -17,10 +17,10 @@ matplotlib.use("Agg")
 
 COLORS = ["#4477aa", "#ee6677", "#228833", "#aa3377", "#ccbb44", "#66ccee"]
 METRIC_LABELS = {
-    "auc": "AUC",
+    "auc": r"AUC $\uparrow$",
     "accuracy": "Accuracy",
     "f1": "F1 Score",
-    "log_likelihood": "Log-Likelihood",
+    "log_likelihood": r"Log-Likelihood $\uparrow$",
     "rmse": "RMSE",
 }
 
@@ -38,7 +38,7 @@ def plot_metrics_vs_horizon(results_df: pd.DataFrame, output_dir: str):
 
     multi_course = "course" in results_df.columns and results_df["course"].nunique() > 1
 
-    metrics = [m for m in ["log_likelihood"]
+    metrics = [m for m in ["log_likelihood", "auc"]
                if m in results_df["metric"].values]
 
     if not metrics:
@@ -48,7 +48,7 @@ def plot_metrics_vs_horizon(results_df: pd.DataFrame, output_dir: str):
     models = sorted(results_df["model"].unique())
     n_metrics = len(metrics)
 
-    fig, axes = plt.subplots(1, n_metrics, figsize=(4 * n_metrics, 3.5))
+    fig, axes = plt.subplots(1, n_metrics, figsize=(3.5 * n_metrics, 2.8))
     if n_metrics == 1:
         axes = [axes]
 
@@ -76,13 +76,12 @@ def plot_metrics_vs_horizon(results_df: pd.DataFrame, output_dir: str):
 
         ax.set_xlabel("Train Cutoff Week")
         ax.set_ylabel(METRIC_LABELS.get(metric, metric))
-        ax.set_title(METRIC_LABELS.get(metric, metric))
         ax.legend(fontsize=7)
         ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
-    save_path = os.path.join(output_dir, "temporal_eval_metrics.png")
+    save_path = os.path.join(output_dir, "metrics_vs_horizon.png")
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Plot saved: {save_path}")
