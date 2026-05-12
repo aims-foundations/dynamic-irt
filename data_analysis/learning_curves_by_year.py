@@ -68,12 +68,14 @@ def main():
     ).cumcount() + 1
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+    # --- Combined 2x2 figure: top = learning curves, bottom = score progression ---
+    fig, axes = plt.subplots(2, 2, figsize=(10, 6))
     x = np.arange(1, MAX_ATTEMPTS + 1)
 
+    # Top row: learning curves by attempt
     for idx, (group_name, year_courses) in enumerate(COURSE_GROUPS.items()):
-        ax = axes[idx]
-
+        ax = axes[0, idx]
         for year, course_name in year_courses.items():
             course_data = submits[submits["course_name"] == course_name]
             n_students = course_data["student_id"].nunique()
@@ -107,10 +109,70 @@ def main():
         ax.set_xlim(1, MAX_ATTEMPTS)
         ax.set_ylim(0, 10)
 
-    handles, labels = axes[0].get_legend_handles_labels()
+    # Bottom row: score progression by chronological problem order
+    ROLLING_WINDOW = 5
+    MAX_PROBLEMS = 80
+    MIN_PROBLEMS = 5
+
+    for idx, (group_name, year_courses) in enumerate(COURSE_GROUPS.items()):
+        ax = axes[1, idx]
+        for year, course_name in year_courses.items():
+            course_data = submits[submits["course_name"] == course_name]
+            course_data = course_data.sort_values(["student_id", "question_unittest_id", "timestamp_dt"])
+
+            records = []
+            for (sid, qid), g in course_data.groupby(["student_id", "question_unittest_id"]):
+                marks_list = g.sort_values("timestamp_dt")["marks"].tolist()
+                if not marks_list:
+                    continue
+                records.append({
+                    "student_id": sid,
+                    "question_unittest_id": qid,
+                    "first_attempt_time": g["timestamp_dt"].min(),
+                    "score": marks_list[-1],
+                })
+            scores_df = pd.DataFrame(records)
+
+            sequences = []
+            for sid, sdata in scores_df.groupby("student_id"):
+                sdata = sdata.sort_values("first_attempt_time")
+                seq = sdata["score"].values[:MAX_PROBLEMS]
+                if len(seq) < MIN_PROBLEMS:
+                    continue
+                sequences.append(seq)
+
+            max_len = min(MAX_PROBLEMS, max(len(s) for s in sequences))
+            sums = np.zeros(max_len)
+            counts = np.zeros(max_len)
+            for seq in sequences:
+                for i, v in enumerate(seq):
+                    sums[i] += v
+                    counts[i] += 1
+            mask = counts >= 10
+            means = np.full(max_len, np.nan)
+            means[mask] = sums[mask] / counts[mask]
+
+            px = np.arange(1, len(means) + 1)
+            smoothed = pd.Series(means).rolling(ROLLING_WINDOW, min_periods=1, center=True).mean().values
+
+            np.random.seed(42)
+            sample_idx = np.random.choice(len(sequences), min(50, len(sequences)), replace=False)
+            for i in sample_idx:
+                sx = np.arange(1, len(sequences[i]) + 1)
+                ax.plot(sx, sequences[i], color=YEAR_COLORS[year], alpha=0.05, linewidth=0.3)
+
+            ax.plot(px[mask], smoothed[mask], color=YEAR_COLORS[year], linewidth=2.5,
+                    linestyle="--", label=f"{year} (n={len(sequences)})", zorder=9)
+
+        ax.set_xlabel("Student's $n$-th Problem (chronological)")
+        ax.set_ylabel("Marks")
+        ax.set_title(f"{group_name} -- Last Submit")
+        ax.set_ylim(0, 10)
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=2, fontsize=8, bbox_to_anchor=(0.5, 1.0))
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
-    out = os.path.join(OUTPUT_DIR, "learning_curves_by_year.png")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    out = os.path.join(OUTPUT_DIR, "learning_curves_combined.png")
     plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"\nFigure saved: {out}")

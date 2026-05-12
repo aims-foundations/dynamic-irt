@@ -145,7 +145,7 @@ def plot_progression():
 
     # === Score progression with individual student trajectories ===
     for metric in METRICS:
-        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+        fig, axes = plt.subplots(1, 2, figsize=(10, 3))
 
         for idx, (group_name, year_courses) in enumerate(COURSE_GROUPS.items()):
             ax = axes[idx]

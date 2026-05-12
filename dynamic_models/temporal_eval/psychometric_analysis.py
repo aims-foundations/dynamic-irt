@@ -47,6 +47,7 @@ def per_course_metrics_plot(df, output_dir):
         pass
 
     metrics = [("log_likelihood", "Log-Likelihood ↑"), ("auc", "AUC ↑")]
+    df = df[df["model"] != "RSSMFull"]
     models = sorted(df["model"].unique())
 
     fig, axes = plt.subplots(2, 1, figsize=(4, 6))
@@ -336,12 +337,12 @@ def student_all_models_plot(predictions, output_dir, question_infos, student_ids
     except ImportError:
         pass
 
-    MODEL_COLORS = {"CIRT": "#4477aa", "DynamicIRT": "#ee6677",
-                    "Elo": "#228833", "RSSM": "#aa3377"}
+    MODEL_COLORS = {"CIRT": "#4477aa", "RSSM": "#aa3377"}
+    EXCLUDE_MODELS = {"Elo", "DynamicIRT"}
     q_week = question_infos.groupby('qidx')['week'].first()
 
     H = horizon or min(h for _, h in predictions.keys())
-    models = sorted(m for m, h in predictions.keys() if h == H)
+    models = sorted(m for m, h in predictions.keys() if h == H and m not in EXCLUDE_MODELS)
 
     # Build per-model question-level data
     def _extract(model, main_data=None):
@@ -451,7 +452,7 @@ def student_all_models_plot(predictions, output_dir, question_infos, student_ids
     for w in sorted(np.unique(common_weeks)):
         w_indices = np.where(common_weeks == w)[0]
         ax.text(w_indices[len(w_indices)//2], 1.07, f"W{w}",
-                ha='center', fontsize=6, color='0.5')
+                ha='center', fontsize=8, color='0.5')
 
     ax.plot(x, ref_actual, color="black", linewidth=1.2, linestyle=':',
             alpha=0.6, zorder=2, label="Actual")
@@ -461,14 +462,14 @@ def student_all_models_plot(predictions, output_dir, question_infos, student_ids
                 color=MODEL_COLORS.get(model, '0.5'), linewidth=1.0, alpha=0.8,
                 zorder=3, label=model)
 
-    ax.set_xlabel("Question (ordered by week)", fontsize=8)
-    ax.set_ylabel(r"$P(\mathrm{correct})$", fontsize=8)
+    ax.set_xlabel("Question (ordered by week)", fontsize=11)
+    ax.set_ylabel(r"$P(\mathrm{correct})$", fontsize=11)
     ax.set_ylim(-0.05, 1.15)
-    ax.tick_params(labelsize=6)
+    ax.tick_params(labelsize=9)
     ax.grid(True, alpha=0.15)
-    ax.legend(fontsize=7, loc='lower right', ncol=len(model_preds) + 1)
-    ax.set_title(f"Student {student_id} — Predicted vs Actual Across All Questions "
-                 f"({n_qs} questions)", fontsize=9)
+    ax.legend(fontsize=9, loc='lower right', ncol=len(model_preds) + 1)
+    ax.set_title(f"Student {student_id} — Predicted vs Actual ({n_qs} questions)",
+                 fontsize=12)
 
     fig.tight_layout()
     save_path = os.path.join(output_dir, "student_all_models_all_questions.png")

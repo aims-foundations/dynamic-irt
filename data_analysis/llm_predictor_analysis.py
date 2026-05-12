@@ -6,6 +6,7 @@ Produces detailed markdown files for each investigation plus figures.
 
 import json
 import os
+import pickle
 import warnings
 
 import matplotlib
@@ -15,6 +16,9 @@ import numpy as np
 import pandas as pd
 from huggingface_hub import snapshot_download
 from scipy.stats import kendalltau, pearsonr, spearmanr
+
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "results", "llm_predictor", ".cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 
 def _pass_fraction(s):
@@ -1088,9 +1092,8 @@ def fig_central_tendency(merged):
     bars2 = axes[0].bar(x + w/2, pred_means, w, label="LLM predicted", color="#D65F5F", edgecolor="white")
     axes[0].set_xlabel("Student ability tier")
     axes[0].set_ylabel("Mean score")
-    axes[0].set_title("By student ability")
     axes[0].set_xticks(x)
-    axes[0].set_xticklabels([f"{t}\n(n={c:,})" for t, c in zip(tiers, counts)])
+    axes[0].set_xticklabels(tiers)
     axes[0].set_ylim(0, 0.85)
     for bar, val in zip(bars1, true_means):
         axes[0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
@@ -1108,9 +1111,8 @@ def fig_central_tendency(merged):
     bars4 = axes[1].bar(x2 + w/2, pred_d, w, label="LLM predicted", color="#D65F5F", edgecolor="white")
     axes[1].set_xlabel("Question difficulty tier")
     axes[1].set_ylabel("Mean score")
-    axes[1].set_title("By question difficulty")
     axes[1].set_xticks(x2)
-    axes[1].set_xticklabels([f"{t}\n(n={c:,})" for t, c in zip(diff_tiers, counts_d)])
+    axes[1].set_xticklabels(diff_tiers)
     axes[1].set_ylim(0, 0.95)
     for bar, val in zip(bars3, true_d):
         axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
@@ -1285,11 +1287,20 @@ def run_analyses(merged, q_merged, real_df, q_info, label):
 
 def main():
     global OUT_DIR
-    print("Loading data...")
-    sim_df, real_df = load_data()
-    merged_raw = compute_merged(sim_df, real_df)
-    q_merged_raw = compute_question_level(sim_df, real_df)
-    q_info = load_question_infos()
+    cache_path = os.path.join(CACHE_DIR, "precomputed.pkl")
+    if os.path.exists(cache_path):
+        print("Loading from cache...")
+        with open(cache_path, "rb") as f:
+            sim_df, real_df, merged_raw, q_merged_raw, q_info = pickle.load(f)
+    else:
+        print("Loading data (first run, will cache)...")
+        sim_df, real_df = load_data()
+        merged_raw = compute_merged(sim_df, real_df)
+        q_merged_raw = compute_question_level(sim_df, real_df)
+        q_info = load_question_infos()
+        with open(cache_path, "wb") as f:
+            pickle.dump((sim_df, real_df, merged_raw, q_merged_raw, q_info), f)
+        print(f"Cached to {cache_path}")
 
     merged, q_merged, blind_qids = filter_blind_spots(merged_raw, q_merged_raw)
 
