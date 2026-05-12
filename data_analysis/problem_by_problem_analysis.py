@@ -47,7 +47,7 @@ OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "problem_outputs")
 
 def load_data_from_huggingface(course_name: str = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Load data from HuggingFace dataset stair-lab/code_insights_csv.
+    Load data from HuggingFace dataset CodeInsightTeam/code_insights_csv.
 
     Args:
         course_name: Course name to filter (e.g., dsa_hk231). If None, loads all courses.
@@ -72,7 +72,7 @@ def load_data_from_huggingface(course_name: str = None) -> tuple[pd.DataFrame, p
         if hf_token:
             login(token=hf_token)
         path = snapshot_download(
-            repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+            repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
         )
 
     main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False, on_bad_lines="skip")

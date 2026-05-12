@@ -105,7 +105,7 @@ def beautify_course_name(course_name):
 
 def load_data_from_huggingface(course_name: str = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Load data from HuggingFace dataset stair-lab/code_insights_csv.
+    Load data from HuggingFace dataset CodeInsightTeam/code_insights_csv.
 
     Args:
         course_name: Course name to filter (e.g., dsa_hk231). If None, loads all courses.

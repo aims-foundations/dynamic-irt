@@ -220,7 +220,7 @@ if __name__ == "__main__":
         )
 
     data_folder = snapshot_download(
-        repo_id="stair-lab/reeval_matrices", repo_type="dataset"
+        repo_id="CodeInsightTeam/reeval_matrices", repo_type="dataset"
     )
 
     skills_by_subject = {
