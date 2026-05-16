@@ -20,6 +20,8 @@ class PredictionResult:
     # Optional metadata for diagnostic breakdown
     student_indices: Optional[np.ndarray] = None
     item_indices: Optional[np.ndarray] = None
+    testcase_indices: Optional[np.ndarray] = None
+    attempt_indices: Optional[np.ndarray] = None
 
     # Training diagnostics
     losses: Optional[Dict[str, List[float]]] = None  # e.g. {"train": [...], "test": [...]}

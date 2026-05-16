@@ -500,9 +500,27 @@ class RSSMFullAdapter(ModelAdapter):
 
         valid_coords = tc_mask.nonzero(as_tuple=False)
         test_student_indices = valid_coords[:, 0].numpy()
+        test_seq_pos = valid_coords[:, 1].numpy()
+        test_tc_indices = valid_coords[:, 2].numpy()
         test_item_indices = test_qidx_t[
             valid_coords[:, 0], valid_coords[:, 1]
         ].numpy()
+
+        test_attempt_indices = np.zeros(len(test_student_indices), dtype=int)
+        prev_key = None
+        attempt = 0
+        prev_seq_pos = -1
+        for i in range(len(test_student_indices)):
+            key = (test_student_indices[i], test_item_indices[i])
+            seq_pos = test_seq_pos[i]
+            if key != prev_key:
+                attempt = 0
+                prev_key = key
+                prev_seq_pos = seq_pos
+            elif seq_pos != prev_seq_pos:
+                attempt += 1
+                prev_seq_pos = seq_pos
+            test_attempt_indices[i] = attempt
 
         if len(y_true) == 0:
             raise ValueError(
@@ -514,6 +532,8 @@ class RSSMFullAdapter(ModelAdapter):
             y_pred_prob=y_pred_prob,
             student_indices=test_student_indices,
             item_indices=test_item_indices,
+            testcase_indices=test_tc_indices,
+            attempt_indices=test_attempt_indices,
             losses={"train": train_losses},
             item_params={
                 "question embedding norm": q_emb_norms,

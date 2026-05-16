@@ -15,7 +15,7 @@ from .data_loader import UnifiedData
 
 matplotlib.use("Agg")
 
-COLORS = ["#4477aa", "#ee6677", "#228833", "#aa3377", "#ccbb44", "#66ccee"]
+COLORS = ["#4477aa", "#ee6677", "#228833", "#aa3377", "#ccbb44", "#66ccee", "#bb5566"]
 METRIC_LABELS = {
     "auc": r"AUC $\uparrow$",
     "accuracy": "Accuracy",

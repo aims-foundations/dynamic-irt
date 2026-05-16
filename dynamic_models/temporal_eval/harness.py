@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from .base_adapter import ModelAdapter, PredictionResult
+from .data_filter import DataFilterConfig, apply_filter
 from .data_loader import UnifiedData, load_unified_data
 from .metrics import compute_metrics
 from .temporal_split import generate_temporal_splits
@@ -18,17 +19,20 @@ def get_adapter_registry() -> Dict[str, ModelAdapter]:
     """Build the full registry of model adapters."""
     from .adapters import (
         CIRTAdapter,
+        CIRTDecayAdapter,
         DynamicIRTAdapter,
         EloAdapter,
         GPIRTAdapter,
+        IRTAdapter,
         LLMAdapter,
         RSSMAdapter,
         RSSMFullAdapter,
     )
-
     return {
         "Elo": EloAdapter(),
+        "IRT": IRTAdapter(),
         "CIRT": CIRTAdapter(),
+        "CIRT-Decay": CIRTDecayAdapter(),
         "DynamicIRT": DynamicIRTAdapter(),
         "GPIRT": GPIRTAdapter(),
         "LLM": LLMAdapter(),
@@ -40,6 +44,53 @@ def get_adapter_registry() -> Dict[str, ModelAdapter]:
 ALL_COURSES = ["dsa_hk231", "dsa_hk221", "pf_hk232", "pf_hk222"]
 
 
+def _apply_index_filter(data: UnifiedData, student_idx, item_idx) -> UnifiedData:
+    """Return a new UnifiedData containing only the selected students and items."""
+    import numpy as np
+
+    corr = data.correctness_matrix[student_idx][:, item_idx]
+    time = data.time_matrix[student_idx][:, item_idx]
+    qi = data.question_infos.iloc[item_idx].reset_index(drop=True)
+    item_week = data.item_week[item_idx]
+    student_ids = [data.student_ids[i] for i in student_idx]
+
+    # Filter main_data to keep only selected students and items
+    sid_set = set(student_ids)
+    # Map item indices to question_unittest_ids for CSV filtering
+    if "question_unittest_id" in data.main_data.columns:
+        kept_qids = set()
+        for idx in item_idx:
+            row = data.question_infos.iloc[idx]
+            if "question_unittest_id" in row.index:
+                kept_qids.add(int(row["question_unittest_id"]))
+        main_data = data.main_data[
+            data.main_data["student_id"].isin(sid_set)
+        ].copy()
+        if kept_qids:
+            main_data = main_data[
+                main_data["question_unittest_id"].isin(kept_qids)
+            ].copy()
+    else:
+        main_data = data.main_data[
+            data.main_data["student_id"].isin(sid_set)
+        ].copy()
+
+    n_s, n_i, n_a = corr.shape
+    return UnifiedData(
+        main_data=main_data,
+        correctness_matrix=corr,
+        time_matrix=time,
+        question_infos=qi,
+        item_week=item_week,
+        qid_to_week=data.qid_to_week,
+        student_ids=student_ids,
+        n_students=n_s,
+        n_items=n_i,
+        n_max_attempts=n_a,
+        course_name=data.course_name,
+    )
+
+
 def run_temporal_evaluation(
     course_name: str = "all",
     cutoff_weeks: Optional[List[int]] = None,
@@ -48,6 +99,7 @@ def run_temporal_evaluation(
     output_dir: str = "results/temporal_eval",
     skip_slow: bool = False,
     slow_threshold_minutes: float = 60.0,
+    data_filter: Optional[DataFilterConfig] = None,
 ) -> Tuple[pd.DataFrame, Dict[Tuple[str, int], PredictionResult], UnifiedData]:
     """Run all models across all temporal horizons.
 
@@ -59,6 +111,7 @@ def run_temporal_evaluation(
         output_dir: Where to save results.
         skip_slow: If True, skip models > slow_threshold_minutes per horizon.
         slow_threshold_minutes: Threshold for --skip_slow.
+        data_filter: Optional DataFilterConfig to filter students/questions.
 
     Returns:
         Tuple of:
@@ -84,6 +137,7 @@ def run_temporal_evaluation(
                 output_dir=course_dir,
                 skip_slow=skip_slow,
                 slow_threshold_minutes=slow_threshold_minutes,
+                data_filter=data_filter,
             )
             df["course"] = course
             all_results.append(df)
@@ -103,6 +157,14 @@ def run_temporal_evaluation(
     print("LOADING DATA")
     print("=" * 60)
     data = load_unified_data(course_name)
+
+    if data_filter is not None:
+        student_idx, item_idx, selected_qs = apply_filter(
+            data.correctness_matrix, data.question_infos, data_filter
+        )
+        print(f"\nData filter applied: {len(student_idx)} students, "
+              f"{len(item_idx)} items, {len(selected_qs)} questions")
+        data = _apply_index_filter(data, student_idx, item_idx)
 
     # 2. Generate splits
     splits = generate_temporal_splits(data.item_week, cutoff_weeks)
