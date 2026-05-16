@@ -38,6 +38,8 @@ from tqdm import tqdm
 from .data_loader import (
     EvalItem,
     Example,
+    _load_hf_main_data,
+    _load_hf_questions,
     infer_public_test_counts,
     load_eval_items,
     parse_test_cases,
@@ -192,8 +194,17 @@ class EvalResult:
 # ── Prompt building ──────────────────────────────────────────────────────────
 
 
-def _build_initial_prompt(item: EvalItem, max_prompt_chars: int = 300_000) -> str:
-    """Build the initial prompt for an item, trimming examples if too long."""
+def _build_initial_prompt(
+    item: EvalItem,
+    max_prompt_chars: int = 300_000,
+    persona_builder=None,
+    rag_retriever=None,
+    history_summarizer=None,
+):
+    """Build the initial prompt for an item, trimming examples if too long.
+
+    Returns str or (system_message, user_message) tuple.
+    """
     examples = [
         {
             "question_name": ex.question_name,
@@ -206,21 +217,55 @@ def _build_initial_prompt(item: EvalItem, max_prompt_chars: int = 300_000) -> st
         for ex in item.examples
     ] or None
 
+    persona_text = None
+    if persona_builder and item.student_id:
+        persona_text = persona_builder.build_persona_text(item.student_id)
+
+    # When RAG + summarize are both on, RAG selects the questions, summarizer compresses them
+    if rag_retriever and history_summarizer and item.student_id:
+        rag_examples = rag_retriever.retrieve_examples(
+            item.student_id, item.question_id,
+            target_timestamp=item.target_timestamp,
+            max_self=5,
+        )
+        if rag_examples:
+            examples = rag_examples  # RAG-selected replace trajectory-selected
+    elif rag_retriever and item.student_id:
+        profile = persona_builder.build_profile(item.student_id) if persona_builder else None
+        pass_rate = profile.overall_pass_rate if profile else 0.5
+
+    rag_context = None  # RAG content goes through summarizer, not as separate block
+
+    # Summarize examples
+    summarized_history = None
+    if history_summarizer and examples:
+        summarized_history = history_summarizer.summarize_history(examples)
+        examples = None
+
     prompt = build_prompt(
         question_name=item.question_name,
         question_text=item.question_text,
         question_template=item.question_template,
         examples=examples,
+        persona_text=persona_text,
+        rag_context=rag_context,
+        summarized_history=summarized_history,
     )
 
-    # Trim oldest examples until prompt fits
-    while len(prompt) > max_prompt_chars and examples:
+    def _prompt_len(p):
+        if isinstance(p, tuple):
+            return len(p[0]) + len(p[1])
+        return len(p)
+
+    while _prompt_len(prompt) > max_prompt_chars and examples:
         examples = examples[1:]
         prompt = build_prompt(
             question_name=item.question_name,
             question_text=item.question_text,
             question_template=item.question_template,
             examples=examples or None,
+            persona_text=persona_text,
+            rag_context=rag_context,
         )
 
     return prompt
@@ -229,8 +274,13 @@ def _build_initial_prompt(item: EvalItem, max_prompt_chars: int = 300_000) -> st
 def _build_feedback_prompt(
     item: EvalItem, code: Optional[str], pub: dict, public_tests: list,
     max_prompt_chars: int = 300_000,
-) -> str:
-    """Build a feedback prompt from failed test results."""
+    persona_builder=None,
+    rag_retriever=None,
+):
+    """Build a feedback prompt from failed test results.
+
+    Returns str or (system_message, user_message) tuple when persona is active.
+    """
     examples = [
         {
             "question_name": ex.question_name,
@@ -242,6 +292,19 @@ def _build_feedback_prompt(
         }
         for ex in item.examples
     ] or None
+
+    persona_text = None
+    if persona_builder and item.student_id:
+        persona_text = persona_builder.build_persona_text(item.student_id)
+
+    rag_context = None
+    if rag_retriever and item.student_id:
+        profile = persona_builder.build_profile(item.student_id) if persona_builder else None
+        pass_rate = profile.overall_pass_rate if profile else 0.5
+        rag_context = rag_retriever.retrieve_context(
+            item.student_id, item.question_id, pass_rate,
+            target_timestamp=item.target_timestamp,
+        )
 
     if code is None:
         feedback = {
@@ -266,7 +329,6 @@ def _build_feedback_prompt(
                     "expected": tc["output"][:500],
                     "actual": actual,
                 })
-        # Limit to first 5 failed tests to avoid huge prompts
         feedback = {
             "previous_code": code,
             "failed_tests": failed_tests[:5],
@@ -278,10 +340,16 @@ def _build_feedback_prompt(
         question_template=item.question_template,
         examples=examples,
         feedback=feedback,
+        persona_text=persona_text,
+        rag_context=rag_context,
     )
 
-    # Trim oldest examples until prompt fits
-    while len(prompt) > max_prompt_chars and examples:
+    def _prompt_len(p):
+        if isinstance(p, tuple):
+            return len(p[0]) + len(p[1])
+        return len(p)
+
+    while _prompt_len(prompt) > max_prompt_chars and examples:
         examples = examples[1:]
         prompt = build_prompt(
             question_name=item.question_name,
@@ -289,15 +357,16 @@ def _build_feedback_prompt(
             question_template=item.question_template,
             examples=examples or None,
             feedback=feedback,
+            persona_text=persona_text,
+            rag_context=rag_context,
         )
 
-    # Safety net: if still too long (feedback/question text alone is huge),
-    # rebuild without feedback to avoid context-length errors
-    if len(prompt) > max_prompt_chars:
+    if _prompt_len(prompt) > max_prompt_chars:
         prompt = build_prompt(
             question_name=item.question_name,
             question_text=item.question_text,
             question_template=item.question_template,
+            persona_text=persona_text,
         )
 
     return prompt
@@ -320,6 +389,9 @@ def _run_chunk(
     student_to_course: Optional[Dict[str, str]] = None,
     student_to_section: Optional[Dict[str, str]] = None,
     question_to_is_exam: Optional[Dict[str, str]] = None,
+    persona_builder=None,
+    rag_retriever=None,
+    history_summarizer=None,
 ) -> List[EvalResult]:
     """Run all attempts (up to max_attempts) on a chunk of items.
 
@@ -379,40 +451,65 @@ def _run_chunk(
             break
 
         # Build prompts for active items
-        prompts = []
+        raw_prompts = []
         for idx in active:
             item = chunk_items[idx]
             if attempt_id == 0:
-                prompts.append(_build_initial_prompt(item))
+                raw_prompts.append(_build_initial_prompt(
+                    item, persona_builder=persona_builder,
+                    rag_retriever=rag_retriever,
+                    history_summarizer=history_summarizer,
+                ))
             else:
                 td = test_data[idx]
                 if td is None:
-                    prompts.append(_build_initial_prompt(item))
+                    raw_prompts.append(_build_initial_prompt(
+                        item, persona_builder=persona_builder,
+                        rag_retriever=rag_retriever,
+                    ))
                 else:
                     tests_used = last_tests.get(idx, td["public_tests"])
                     ev = last_eval.get(idx, {
                         "testcases": [0] * len(tests_used),
                         "outputs": [""] * len(tests_used),
                     })
-                    prompts.append(_build_feedback_prompt(
+                    raw_prompts.append(_build_feedback_prompt(
                         item, last_code[idx], ev, tests_used,
+                        persona_builder=persona_builder,
+                        rag_retriever=rag_retriever,
                     ))
 
+        # Split system/user messages for runners that support them
+        user_prompts = []
+        system_prompts = []
+        conversations = []
+        for rp in raw_prompts:
+            if isinstance(rp, tuple):
+                system_prompts.append(rp[0])
+                user_prompts.append(rp[1])
+                conversations.append(None)
+            else:
+                system_prompts.append(None)
+                user_prompts.append(rp)
+                conversations.append(None)
+
         # Batch generate in sub-batches
-        n_sub = (len(prompts) + batch_size - 1) // batch_size
+        n_sub = (len(user_prompts) + batch_size - 1) // batch_size
         logger.info(
             "%s | Attempt %d/%d: %d active items (%d sub-batches of %d)",
             chunk_label, attempt_id + 1, max_attempts,
             len(active), n_sub, batch_size,
         )
         all_responses = []
-        for sb, start in enumerate(range(0, len(prompts), batch_size), 1):
-            sub = prompts[start:start + batch_size]
+        for sb, start in enumerate(range(0, len(user_prompts), batch_size), 1):
+            sub_user = user_prompts[start:start + batch_size]
+            sub_sys = system_prompts[start:start + batch_size]
+            sub_conv = conversations[start:start + batch_size]
             logger.info(
                 "%s |   sub-batch %d/%d (%d items)",
-                chunk_label, sb, n_sub, len(sub),
+                chunk_label, sb, n_sub, len(sub_user),
             )
-            all_responses.extend(runner.generate(sub))
+            all_responses.extend(runner.generate(sub_user, system_prompts=sub_sys, conversations=sub_conv))
 
         # Parse actions and codes
         # Use DD/MM/YY format to match real student data (required by IRT models)
@@ -493,7 +590,7 @@ def _run_chunk(
         n_submit_passed = 0
         for i, idx in enumerate(active):
             raw = all_responses[i]
-            prompt = prompts[i]
+            prompt = user_prompts[i]
             code = codes_for_grading[i]
             action = actions[i]
             td = test_data[idx]
@@ -620,6 +717,9 @@ def run_batch_iterative(
     port: Optional[int] = None,
     max_submits: int = 50,
     early_stop_patience: int = 5,
+    persona_builder=None,
+    rag_retriever=None,
+    history_summarizer=None,
 ) -> List[EvalResult]:
     """Chunked batch-iterative evaluation.
 
@@ -632,10 +732,8 @@ def run_batch_iterative(
     """
     runner = create_runner(model_key, tensor_parallel_size=tensor_parallel_size, port=port)
     all_results: List[EvalResult] = []
-    n_chunks = (len(items) + chunk_size - 1) // chunk_size
 
-    # Resume: load existing results and skip completed chunks
-    skip_chunks = 0
+    # Resume: load existing results and skip completed (student, question) pairs
     existing_rows = []
     if output_dir:
         shard_suffix = f"_shard{shard.replace('/', 'of')}" if shard else ""
@@ -644,21 +742,26 @@ def run_batch_iterative(
         if os.path.exists(existing_path):
             with open(existing_path) as f:
                 existing_rows = [json.loads(line) for line in f]
-            if existing_rows:
-                existing_pairs = set(
-                    (r["student_id"], r["question_unittest_id"])
-                    for r in existing_rows
-                )
-                skip_chunks = len(existing_pairs) // chunk_size
-                logger.info(
-                    "Resume: found %d existing pairs (%d complete chunks) in %s",
-                    len(existing_pairs), skip_chunks, existing_path,
-                )
+
+    completed_pairs = set()
+    if existing_rows:
+        completed_pairs = set(
+            (str(r["student_id"]), str(r["question_unittest_id"]))
+            for r in existing_rows
+        )
+        original_count = len(items)
+        items = [
+            it for it in items
+            if (str(it.student_id), str(it.question_id)) not in completed_pairs
+        ]
+        logger.info(
+            "Resume: %d pairs already completed, %d remaining (was %d).",
+            len(completed_pairs), len(items), original_count,
+        )
+
+    n_chunks = (len(items) + chunk_size - 1) // chunk_size
 
     for chunk_idx, chunk_start in enumerate(range(0, len(items), chunk_size)):
-        if chunk_idx < skip_chunks:
-            continue
-
         chunk_items = items[chunk_start:chunk_start + chunk_size]
         chunk_label = f"[{model_key}] Chunk {chunk_idx + 1}/{n_chunks}"
         logger.info(
@@ -675,6 +778,9 @@ def run_batch_iterative(
             student_to_course=student_to_course,
             student_to_section=student_to_section,
             question_to_is_exam=question_to_is_exam,
+            persona_builder=persona_builder,
+            rag_retriever=rag_retriever,
+            history_summarizer=history_summarizer,
         )
         all_results.extend(chunk_results)
 
@@ -683,16 +789,23 @@ def run_batch_iterative(
             save_results(
                 all_results, output_dir, model_key,
                 n_examples, max_attempts, shard=shard,
-                prepend_rows=existing_rows if skip_chunks > 0 else None,
+                prepend_rows=existing_rows if existing_rows else None,
             )
             logger.info(
                 "%s | Saved %d total results so far (%d new + %d resumed)",
                 chunk_label,
-                len(all_results) + (len(existing_rows) if skip_chunks > 0 else 0),
+                len(all_results) + len(existing_rows),
                 len(all_results),
-                len(existing_rows) if skip_chunks > 0 else 0,
+                len(existing_rows),
             )
 
+    if hasattr(runner, "total_cost"):
+        logger.info(
+            "=== TOTAL COST: $%.4f (%d calls, %dk input, %dk output, %dk cache_read, %dk cache_write) ===",
+            runner.total_cost, runner._call_count,
+            runner.total_input_tokens // 1000, runner.total_output_tokens // 1000,
+            runner.total_cache_read_tokens // 1000, runner.total_cache_write_tokens // 1000,
+        )
     if hasattr(runner, "cleanup"):
         runner.cleanup()
 
@@ -774,6 +887,14 @@ def main():
         help="Random seed for student/question sampling (default: 42)",
     )
     parser.add_argument(
+        "--course", type=str, default=None,
+        help="Filter to a specific course (e.g., dsa_hk231, pf_hk232)",
+    )
+    parser.add_argument(
+        "--cutoff_week", type=int, default=1,
+        help="Temporal cutoff: predict on questions from weeks after this, RAG/persona use only weeks up to this (default: 1)",
+    )
+    parser.add_argument(
         "--data_dir", default="data",
         help="Directory with scenario CSVs (default: data/)",
     )
@@ -805,6 +926,34 @@ def main():
         "--early_stop_patience", type=int, default=5,
         help="Stop retrying an item after N consecutive submits with no improvement (default: 5)",
     )
+    parser.add_argument(
+        "--chunk_size", type=int, default=50,
+        help="Items per chunk — results save after each chunk (default: 50)",
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=20,
+        help="Items per LLM batch within a chunk (default: 20)",
+    )
+    parser.add_argument(
+        "--persona", action="store_true", default=True,
+        help="Enable rich student persona in system prompt (default: on)",
+    )
+    parser.add_argument(
+        "--rag", action="store_true",
+        help="Enable RAG-based context retrieval from embeddings",
+    )
+    parser.add_argument(
+        "--rag_max_peers", type=int, default=3,
+        help="Max peer submissions to retrieve via RAG (default: 3)",
+    )
+    parser.add_argument(
+        "--rag_max_self", type=int, default=3,
+        help="Max self-similar submissions to retrieve via RAG (default: 3)",
+    )
+    parser.add_argument(
+        "--summarize", action="store_true",
+        help="Summarize student examples and RAG context into compact behavioral descriptions",
+    )
     args = parser.parse_args()
 
     # ── Load data ────────────────────────────────────────────────────────
@@ -814,6 +963,8 @@ def main():
         max_samples=args.max_samples,
         max_students=args.max_students,
         max_questions=args.max_questions,
+        course=args.course,
+        cutoff_week=args.cutoff_week,
         seed=args.seed,
     )
     logger.info(
@@ -832,35 +983,86 @@ def main():
             shard_idx, n_shards, start, end - 1, len(items),
         )
 
+    # ── Load main_df early if persona/rag/dry_run needs it ────────────────
+    main_df = None
+    question_infos = None
+
+    if args.persona or args.rag or not args.dry_run:
+        logger.info("Loading main_data.csv for public-test inference and student info…")
+        main_df = _load_hf_main_data()
+        question_infos = _load_hf_questions()
+
+    # ── Build persona builder and RAG retriever ─────────────────────────
+    persona_builder = None
+    rag_retriever = None
+
+    # Filter main_df to only weeks <= cutoff_week for persona and RAG
+    # This ensures the LLM only sees the same training data as RSSM
+    train_main_df = main_df
+    if args.cutoff_week and question_infos is not None:
+        try:
+            from dynamic_models.temporal_eval.data_loader import load_unified_data as _load_unified
+            unified = _load_unified(args.course) if args.course else None
+        except Exception:
+            unified = None
+
+        if unified is not None and hasattr(unified, "qid_to_week"):
+            train_qids = set(
+                qid for qid, week in unified.qid_to_week.items()
+                if week <= args.cutoff_week
+            )
+            train_main_df = main_df[main_df["question_unittest_id"].isin(train_qids)].copy()
+            logger.info("Persona/RAG filtered to weeks <= %d: %d/%d rows, %d questions.",
+                         args.cutoff_week, len(train_main_df), len(main_df), len(train_qids))
+
+    if args.persona and train_main_df is not None:
+        from .persona import PersonaBuilder
+        from huggingface_hub import snapshot_download as _snap
+        hf_dir = _snap(repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset")
+        course_infos = pd.read_csv(os.path.join(hf_dir, "course_infos.csv"))
+        section_infos = pd.read_csv(os.path.join(hf_dir, "section_infos.csv"))
+        persona_builder = PersonaBuilder(
+            train_main_df, question_infos,
+            course_infos=course_infos, section_infos=section_infos,
+        )
+        logger.info("PersonaBuilder initialized for %d students.", len(persona_builder))
+
+    if args.rag and train_main_df is not None:
+        from .rag import RAGRetriever
+        rag_retriever = RAGRetriever(train_main_df, question_infos)
+        logger.info("RAGRetriever initialized.")
+
+    history_summarizer = None
+    if args.summarize:
+        from .summarize import HistorySummarizer
+        history_summarizer = HistorySummarizer()
+        logger.info("HistorySummarizer initialized.")
+
     if args.dry_run:
-        # Show sample prompts
         for item in items[:2]:
-            examples = [
-                {
-                    "question_name": ex.question_name,
-                    "question_text": ex.question_text,
-                    "question_template": ex.question_template,
-                    "response": ex.response,
-                }
-                for ex in item.examples
-            ] or None
-            prompt = build_prompt(
-                question_name=item.question_name,
-                question_text=item.question_text,
-                question_template=item.question_template,
-                examples=examples,
+            prompt = _build_initial_prompt(
+                item, persona_builder=persona_builder,
+                rag_retriever=rag_retriever,
+                history_summarizer=history_summarizer,
             )
-            logger.info(
-                "--- Item: Q=%s, S=%s ---\n%s\n",
-                item.question_id, item.student_id, prompt[:500],
-            )
+            if isinstance(prompt, tuple):
+                sys_msg, user_msg = prompt
+                logger.info(
+                    "--- Item: Q=%s, S=%s ---\n"
+                    "=== SYSTEM MESSAGE ===\n%s\n\n"
+                    "=== USER MESSAGE ===\n%s\n",
+                    item.question_id, item.student_id,
+                    sys_msg[:800], user_msg[:500],
+                )
+            else:
+                logger.info(
+                    "--- Item: Q=%s, S=%s ---\n%s\n",
+                    item.question_id, item.student_id, prompt[:500],
+                )
         logger.info("Dry run complete. %d items loaded.", len(items))
         return
 
     # ── Load public test counts and student info ────────────────────────
-    from .data_loader import _load_hf_main_data
-    logger.info("Loading main_data.csv for public-test inference and student info…")
-    main_df = _load_hf_main_data()
     n_public_map = infer_public_test_counts(main_df)
     logger.info("Inferred public-test counts for %d questions.", len(n_public_map))
 
@@ -898,10 +1100,15 @@ def main():
                 question_to_is_exam=question_to_is_exam,
                 tensor_parallel_size=args.tp,
                 output_dir=args.output_dir,
+                batch_size=args.batch_size,
+                chunk_size=args.chunk_size,
                 shard=args.shard,
                 port=args.port,
                 max_submits=args.max_submits,
                 early_stop_patience=args.early_stop_patience,
+                persona_builder=persona_builder,
+                rag_retriever=rag_retriever,
+                history_summarizer=history_summarizer,
             )
         except Exception as e:
             logger.error("Model %s failed: %s", model_key, e, exc_info=True)

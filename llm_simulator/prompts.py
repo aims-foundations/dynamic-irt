@@ -7,7 +7,7 @@ One scenario ("imitate this student"), parameterized by:
 """
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 # ── Code extraction ──────────────────────────────────────────────────────────
 
@@ -108,7 +108,10 @@ def build_prompt(
     question_template: str,
     examples: Optional[List[Dict[str, str]]] = None,
     feedback: Optional[Dict] = None,
-) -> str:
+    persona_text: Optional[str] = None,
+    rag_context: Optional[str] = None,
+    summarized_history: Optional[str] = None,
+) -> Union[str, Tuple[str, str]]:
     """Build a unified prompt for LLM student simulation.
 
     Parameters
@@ -127,16 +130,25 @@ def build_prompt(
         Retry feedback from a previous attempt. Keys:
         ``previous_code`` (str), ``failed_tests`` (list of dict with keys
         ``input``, ``std_in``, ``expected``, ``actual``).
+    persona_text : str, optional
+        Character Card-style persona for use as system message.
+    rag_context : str, optional
+        Retrieved reference submissions for additional context.
 
     Returns
     -------
-    str
-        The assembled prompt string.
+    str or (str, str)
+        If persona_text is provided, returns (system_message, user_message).
+        Otherwise returns a single prompt string.
     """
     parts: List[str] = []
 
+    # ── Summarized history (replaces raw examples when --summarize is used) ──
+    if summarized_history:
+        parts.append(summarized_history)
+
     # ── In-context examples (few-shot / trajectory) ──
-    if examples:
+    elif examples:
         parts.append("=== Student Submission History ===\n")
         parts.append(
             "Below are this student's previous submissions on other problems, "
@@ -169,6 +181,10 @@ def build_prompt(
             "Now, using the same student's coding style, approach, and "
             "Precheck/Submit strategy, attempt this new problem:\n"
         )
+
+    # ── RAG context ──
+    if rag_context:
+        parts.append(f"{rag_context}\n")
 
     # ── Target question ──
     parts.append(
@@ -203,4 +219,8 @@ def build_prompt(
     # ── Instructions ──
     parts.append(f"\n{_CODE_INSTRUCTIONS}")
 
-    return "\n".join(parts)
+    user_message = "\n".join(parts)
+
+    if persona_text:
+        return (persona_text, user_message)
+    return user_message

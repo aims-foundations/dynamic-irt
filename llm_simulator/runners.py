@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +27,31 @@ class LLMRunner:
         self.max_workers = max_workers
         self.delay = delay
 
-    def call(self, prompt: str) -> str:
+    def call(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Generate a response for a single prompt."""
         raise NotImplementedError
 
-    def generate(self, prompts: List[str]) -> List[str]:
+    def generate(
+        self,
+        prompts: List[str],
+        system_prompts: Optional[List[Optional[str]]] = None,
+        conversations: Optional[List[Optional[List[dict]]]] = None,
+    ) -> List[str]:
         """Generate responses for a batch of prompts.
 
         Default implementation uses ThreadPoolExecutor over call().
         VLLMRunner overrides this for true batch inference.
         """
+        if system_prompts is None:
+            system_prompts = [None] * len(prompts)
+        if conversations is None:
+            conversations = [None] * len(prompts)
         results = [""] * len(prompts)
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(self.call, p): i for i, p in enumerate(prompts)}
+            futures = {
+                executor.submit(self.call, p, sp, conv): i
+                for i, (p, sp, conv) in enumerate(zip(prompts, system_prompts, conversations))
+            }
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
@@ -55,18 +67,73 @@ class LLMRunner:
 
 
 class ClaudeRunner(LLMRunner):
+    # Pricing per million tokens (as of 2025)
+    PRICING = {
+        "claude-opus-4-6": {"input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75},
+        "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0, "cache_read": 0.30, "cache_write": 3.75},
+        "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0, "cache_read": 0.08, "cache_write": 1.0},
+    }
+
     def __init__(self, api_model: str, **kwargs):
         super().__init__(**kwargs)
         import anthropic as _anthropic
         self.client = _anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         self.api_model = api_model
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cache_read_tokens = 0
+        self.total_cache_write_tokens = 0
+        self.total_cost = 0.0
+        self._call_count = 0
 
-    def call(self, prompt: str) -> str:
-        msg = self.client.messages.create(
-            model=self.api_model, max_tokens=4000,
-            stop_sequences=["\n```"],
-            messages=[{"role": "user", "content": prompt}],
+    def _track_usage(self, msg):
+        usage = msg.usage
+        input_t = getattr(usage, "input_tokens", 0)
+        output_t = getattr(usage, "output_tokens", 0)
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+
+        self.total_input_tokens += input_t
+        self.total_output_tokens += output_t
+        self.total_cache_read_tokens += cache_read
+        self.total_cache_write_tokens += cache_write
+        self._call_count += 1
+
+        # input_tokens includes cached tokens, so subtract them for base rate
+        prices = self.PRICING.get(self.api_model, self.PRICING["claude-opus-4-6"])
+        non_cached_input = input_t - cache_read - cache_write
+        cost = (
+            non_cached_input * prices["input"] / 1_000_000
+            + output_t * prices["output"] / 1_000_000
+            + cache_read * prices["cache_read"] / 1_000_000
+            + cache_write * prices["cache_write"] / 1_000_000
         )
+        self.total_cost += cost
+
+        if self._call_count % 10 == 0:
+            logger.info(
+                "Cost tracker: %d calls, $%.4f total (in=%dk, out=%dk, cache_r=%dk, cache_w=%dk)",
+                self._call_count, self.total_cost,
+                self.total_input_tokens // 1000, self.total_output_tokens // 1000,
+                self.total_cache_read_tokens // 1000, self.total_cache_write_tokens // 1000,
+            )
+
+    def call(
+        self, prompt: str, system_prompt: Optional[str] = None,
+        conversation: Optional[List[dict]] = None,
+    ) -> str:
+        if conversation:
+            messages = conversation
+        else:
+            messages = [{"role": "user", "content": prompt}]
+        kwargs = dict(
+            model=self.api_model, max_tokens=4000,
+            messages=messages,
+        )
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        msg = self.client.messages.create(**kwargs)
+        self._track_usage(msg)
         return msg.content[0].text
 
 
@@ -78,9 +145,12 @@ class GeminiRunner(LLMRunner):
         self.model = _genai.GenerativeModel(api_model)
         self._genai = _genai
 
-    def call(self, prompt: str) -> str:
+    def call(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        content = prompt
+        if system_prompt:
+            content = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{prompt}"
         resp = self.model.generate_content(
-            contents=[prompt],
+            contents=[content],
             generation_config=self._genai.types.GenerationConfig(
                 max_output_tokens=4000,
                 stop_sequences=["\n```"],
@@ -104,10 +174,14 @@ class OpenAIRunner(LLMRunner):
         self.max_tokens = max_tokens
         self.stop = stop
 
-    def call(self, prompt: str) -> str:
+    def call(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
         resp = self.client.chat.completions.create(
             model=self.api_model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=self.max_tokens,
             stop=self.stop,
         )
@@ -121,14 +195,17 @@ class MistralRunner(LLMRunner):
         self.client = _Mistral(api_key=os.environ["MISTRAL_API_KEY"])
         self.api_model = api_model
 
-    def call(self, prompt: str) -> str:
+    def call(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
         resp = self.client.chat.complete(
             model=self.api_model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=4000,
         )
         text = resp.choices[0].message.content
-        # Mistral doesn't always honour stop sequences
         idx = text.find("\n```")
         return text[:idx] if idx != -1 else text
 
@@ -172,20 +249,33 @@ class VLLMRunner(LLMRunner):
             temperature=self.temperature,
         )
 
-    def _make_messages(self, prompt: str):
+    def _make_messages(self, prompt: str, system_prompt: Optional[str] = None):
         """Wrap a text prompt in chat message format."""
-        return [{"role": "user", "content": prompt}]
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        return messages
 
-    def call(self, prompt: str) -> str:
+    def call(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         self._ensure_initialized()
         outputs = self._model.chat(
-            [self._make_messages(prompt)], self._sampling_params,
+            [self._make_messages(prompt, system_prompt)], self._sampling_params,
         )
         return outputs[0].outputs[0].text
 
-    def generate(self, prompts: List[str]) -> List[str]:
+    def generate(
+        self,
+        prompts: List[str],
+        system_prompts: Optional[List[Optional[str]]] = None,
+    ) -> List[str]:
         self._ensure_initialized()
-        conversations = [self._make_messages(p) for p in prompts]
+        if system_prompts is None:
+            system_prompts = [None] * len(prompts)
+        conversations = [
+            self._make_messages(p, sp)
+            for p, sp in zip(prompts, system_prompts)
+        ]
         outputs = self._model.chat(conversations, self._sampling_params)
         return [o.outputs[0].text if o.outputs else "" for o in outputs]
 
@@ -207,10 +297,16 @@ class VLLMRunner(LLMRunner):
 MODEL_CONFIGS: Dict[str, dict] = {
     # Commercial API models
     "claude": {
-        "api_model": "claude-sonnet-4-20250514",
+        "api_model": "claude-opus-4-6",
         "backend": "anthropic",
-        "max_workers": 2,
-        "delay": 1.0,
+        "max_workers": 10,
+        "delay": 0.2,
+    },
+    "haiku": {
+        "api_model": "claude-haiku-4-5-20251001",
+        "backend": "anthropic",
+        "max_workers": 4,
+        "delay": 0.3,
     },
     "gpt": {
         "api_model": "gpt-4.1-nano",
