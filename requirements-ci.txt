@@ -1,0 +1,36 @@
+# Minimal requirements for CI/linting (excludes heavy ML packages)
+# Core data / compute
+pandas>=2.0.0
+numpy>=1.26.0
+scipy>=1.10.0
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+tueplots
+
+# AST parsing and similarity
+apted>=1.0.3
+tree-sitter>=0.25.0
+tree-sitter-cpp>=0.23.0
+
+# LLM API clients (lightweight)
+anthropic
+google-generativeai
+openai
+mistralai
+
+# HTTP + templating
+requests>=2.28.0
+jinja2>=3.0.0
+
+# Progress + utilities
+tqdm>=4.65.0
+python-Levenshtein
+
+# Data collection
+selenium
+webdriver-manager
+wandb
+gdown

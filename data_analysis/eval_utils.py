@@ -178,11 +178,11 @@ def generate_code(
     return rendered_codes
 
 
-def get_scenario_student_df(scenario_id, data_folder):
+def get_scenario_student_df(scenario, data_folder):
     scenario_student_df = pd.read_csv(
         os.path.join(
             data_folder,
-            f"Scenario{scenario_id}_full_data.csv",
+            f"Scenario{scenario}_full_data.csv",
         ),
         dtype={"pass": str}
     )
