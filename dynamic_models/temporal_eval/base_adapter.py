@@ -63,7 +63,22 @@ class ModelAdapter(ABC):
         """
         ...
 
+    def fit_and_predict_student_split(
+        self,
+        data: "UnifiedData",
+        split: "StudentSplit",
+        seed: int = 42,
+        **kwargs,
+    ) -> PredictionResult:
+        """Train on train students, calibrate test students, predict.
+
+        Training: learn item params from train students (all weeks).
+        Calibration: estimate test student ability from weeks 1..W.
+        Prediction: predict test students' weeks W+1..end.
+        """
+        raise NotImplementedError(f"{self.name} does not support student splits")
+
     @abstractmethod
-    def estimated_runtime_minutes(self, data: UnifiedData) -> float:
+    def estimated_runtime_minutes(self, data: "UnifiedData") -> float:
         """Rough runtime estimate so the harness can plan."""
         ...

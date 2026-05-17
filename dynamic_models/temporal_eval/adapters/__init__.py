@@ -1,3 +1,5 @@
+from .bkt_adapter import BKTAdapter
+from .dkt_adapter import DKTAdapter
 from .elo_adapter import EloAdapter
 from .cirt_adapter import CIRTAdapter
 from .cirt_decay_adapter import CIRTDecayAdapter
@@ -9,6 +11,8 @@ from .rssm_adapter import RSSMAdapter
 from .rssm_full_adapter import RSSMFullAdapter
 
 __all__ = [
+    "BKTAdapter",
+    "DKTAdapter",
     "EloAdapter",
     "CIRTAdapter",
     "CIRTDecayAdapter",

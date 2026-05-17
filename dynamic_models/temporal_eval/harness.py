@@ -18,8 +18,10 @@ from .temporal_split import generate_temporal_splits
 def get_adapter_registry() -> Dict[str, ModelAdapter]:
     """Build the full registry of model adapters."""
     from .adapters import (
+        BKTAdapter,
         CIRTAdapter,
         CIRTDecayAdapter,
+        DKTAdapter,
         DynamicIRTAdapter,
         EloAdapter,
         GPIRTAdapter,
@@ -29,6 +31,8 @@ def get_adapter_registry() -> Dict[str, ModelAdapter]:
         RSSMFullAdapter,
     )
     return {
+        "BKT": BKTAdapter(),
+        "DKT": DKTAdapter(),
         "Elo": EloAdapter(),
         "IRT": IRTAdapter(),
         "CIRT": CIRTAdapter(),

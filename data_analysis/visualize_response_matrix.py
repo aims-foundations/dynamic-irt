@@ -20,7 +20,8 @@ import pandas as pd
 import torch
 from matplotlib.colors import ListedColormap
 
-from dynamic_models.temporal_eval.data_filter import DEFAULT_FILTER, apply_filter
+from dynamic_models.temporal_eval.data_filter import DEFAULT_FILTER, DataFilterConfig, apply_filter
+from dynamic_models.temporal_eval.data_loader import load_student_split_data
 
 matplotlib.use("Agg")
 
@@ -203,16 +204,29 @@ def main():
     parser = argparse.ArgumentParser(description="Visualize raw response matrix")
     parser.add_argument("--course", type=str, default="dsa_hk231")
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--mode", type=str, choices=["temporal", "student"], default="student")
     args = parser.parse_args()
 
-    output_dir = args.output_dir or f"results/temporal_eval/{args.course}/figures"
+    output_dir = args.output_dir or f"results/student_eval/{args.course}/figures"
 
     corr, qi, si = load_data(args.course)
     print(f"Loaded: {corr.shape[0]} students, {corr.shape[1]} items, {corr.shape[2]} max attempts")
 
-    row_indices, col_indices, selected_qs = apply_filter(corr, qi)
+    if args.mode == "student":
+        data, split = load_student_split_data(args.course)
+
+        # Test students, weeks 1-3 items
+        row_indices = split.test_student_indices
+        col_indices = split.train_item_indices
+        qi = data.question_infos
+        corr = data.correctness_matrix
+        selected_qs = sorted(set(qi.iloc[col_indices]["qidx"].values))
+
+        print(f"Test students: {len(row_indices)}, weeks 1-3 items: {len(col_indices)}")
+    else:
+        row_indices, col_indices, selected_qs = apply_filter(corr, qi)
+
     matrix = collapse_last_attempt(corr, max_attempt=DEFAULT_FILTER.max_attempts)
-    print(f"Selected {len(row_indices)} students, {len(col_indices)} items across {len(selected_qs)} questions")
 
     compact_path = os.path.join(output_dir, "attempt_progression_compact.png")
     plot_attempt_progression_compact(corr, matrix, qi, si, row_indices, col_indices, selected_qs, compact_path)

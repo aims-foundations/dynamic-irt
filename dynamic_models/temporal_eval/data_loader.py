@@ -2,13 +2,18 @@
 
 Loads data once from HuggingFace in both CSV and tensor formats,
 so all model adapters can consume data in their preferred format.
+
+For student-based evaluation, use load_student_split_data() which
+applies quality filtering, caps attempts, and splits students —
+returning a single (data, split) pair that all adapters share.
 """
 
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
+import numpy as np
 import pandas as pd
 import torch
 from huggingface_hub import snapshot_download
@@ -161,3 +166,60 @@ def load_unified_data(course_name: str = "all") -> UnifiedData:
         n_max_attempts=n_max_attempts,
         course_name=course_name,
     )
+
+
+def load_student_split_data(
+    course_name: str = "dsa_hk231",
+    max_attempts: int = 10,
+    test_frac: float = 0.3,
+    train_week_cutoff: int = 3,
+    seed: int = 42,
+) -> Tuple["UnifiedData", "StudentSplit"]:
+    """Load data, apply quality filter, cap attempts, split students.
+
+    Returns a single (data, split) pair shared by all adapters.
+    """
+    from .data_filter import DataFilterConfig, apply_filter
+    from .harness import _apply_index_filter
+    from .student_split import StudentSplit, generate_student_split
+
+    data = load_unified_data(course_name)
+
+    # Quality filter across all weeks
+    max_week = int(data.question_infos["week"].max())
+    config = DataFilterConfig(max_week=max_week, max_attempts=max_attempts)
+    student_idx, item_idx, _ = apply_filter(
+        data.correctness_matrix, data.question_infos, config
+    )
+    data = _apply_index_filter(data, student_idx, item_idx)
+
+    # Cap attempts
+    if data.n_max_attempts > max_attempts:
+        data = UnifiedData(
+            main_data=data.main_data,
+            correctness_matrix=data.correctness_matrix[:, :, :max_attempts],
+            time_matrix=data.time_matrix[:, :, :max_attempts],
+            question_infos=data.question_infos,
+            item_week=data.item_week,
+            qid_to_week=data.qid_to_week,
+            student_ids=data.student_ids,
+            n_students=data.n_students,
+            n_items=data.n_items,
+            n_max_attempts=max_attempts,
+            course_name=data.course_name,
+        )
+
+    # Student split
+    split = generate_student_split(
+        n_students=data.n_students,
+        item_week=data.item_week,
+        train_week_cutoff=train_week_cutoff,
+        test_frac=test_frac,
+        seed=seed,
+    )
+
+    print(f"  Filtered: {data.n_students} students, {data.n_items} items, "
+          f"{data.n_max_attempts} attempts")
+    print(f"  {split}")
+
+    return data, split

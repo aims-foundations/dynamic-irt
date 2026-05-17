@@ -1,11 +1,12 @@
-"""Plot per-attempt accuracy for IRT and CIRT-Decay on filtered data.
+"""Plot per-attempt accuracy for models on student-split evaluation.
 
 Each point has a confidence interval from two-way cluster bootstrap
 (resampling both students and questions).
 
 Usage:
     python data_analysis/plot_filtered_accuracy.py
-    python data_analysis/plot_filtered_accuracy.py --courses dsa_hk231 dsa_hk221
+    python data_analysis/plot_filtered_accuracy.py --courses dsa_hk231
+    python data_analysis/plot_filtered_accuracy.py --mode temporal --courses dsa_hk231
 """
 
 import argparse
@@ -28,6 +29,9 @@ ALL_COURSES = ["dsa_hk231", "dsa_hk221", "pf_hk232", "pf_hk222"]
 MODEL_STYLES = {
     "IRT": {"color": "#2080cc", "marker": "o"},
     "CIRT-Decay": {"color": "#d63030", "marker": "s"},
+    "DynamicIRT": {"color": "#e68a00", "marker": "p"},
+    "BKT": {"color": "#2e8b57", "marker": "D"},
+    "DKT": {"color": "#7b2d8e", "marker": "^"},
 }
 
 
@@ -69,16 +73,17 @@ def twoway_cluster_bootstrap_ci(student_ids, item_ids, matches, n_boot=2000, con
     return np.quantile(boot_means, alpha), np.quantile(boot_means, 1 - alpha)
 
 
-def load_predictions(course, model_name, results_dir="results/filtered_eval"):
-    course_dir = os.path.join(results_dir, course)
-    cutoff = DEFAULT_FILTER.max_week
-    pkl_path = os.path.join(course_dir, f"{model_name}_W{cutoff}.pkl")
+def load_prediction_result(model_name, output_dir, mode="student"):
+    """Load a saved PredictionResult pickle."""
+    if mode == "student":
+        pkl_path = os.path.join(output_dir, f"{model_name}_student_pred.pkl")
+    else:
+        cutoff = DEFAULT_FILTER.max_week
+        pkl_path = os.path.join(output_dir, f"{model_name}_W{cutoff}_pred.pkl")
     if not os.path.exists(pkl_path):
-        print(f"  WARNING: {pkl_path} not found, skipping")
         return None
     with open(pkl_path, "rb") as f:
-        state = pickle.load(f)
-    return state
+        return pickle.load(f)
 
 
 def compute_per_attempt_accuracy(prediction, max_attempts=10):
@@ -132,19 +137,20 @@ def compute_per_attempt_accuracy(prediction, max_attempts=10):
     return np.array(accs), np.array(ci_los), np.array(ci_his), np.array(counts)
 
 
-def run_filtered_eval_and_get_predictions(course, models):
-    """Run filtered eval to get prediction objects (not just saved state)."""
-    from dynamic_models.temporal_eval.run_filtered_eval import run_filtered_evaluation
-    _, predictions, _ = run_filtered_evaluation(
-        course_name=course,
-        models=models,
-        output_dir=f"results/filtered_eval/{course}",
-    )
-    return predictions
+def plot_course(course, models, max_attempts, output_dir, mode="student"):
+    predictions = {}
+    missing = []
+    for m in models:
+        pred = load_prediction_result(m, output_dir, mode)
+        if pred is not None:
+            predictions[m] = pred
+            print(f"  Loaded saved predictions for {m}")
+        else:
+            missing.append(m)
 
-
-def plot_course(course, models, max_attempts, output_dir):
-    predictions = run_filtered_eval_and_get_predictions(course, models)
+    if missing:
+        print(f"  WARNING: Missing predictions for {missing}. "
+              f"Run run_student_eval.py first.")
 
     fig, ax = plt.subplots(figsize=(8, 5))
     x = np.arange(1, max_attempts + 1)
@@ -172,7 +178,8 @@ def plot_course(course, models, max_attempts, output_dir):
 
     ax.set_xlabel("Attempt Number")
     ax.set_ylabel("Accuracy")
-    ax.set_title(f"Per-Attempt Accuracy on Filtered Data ({course})")
+    split_label = "Student Split" if mode == "student" else "Temporal Split"
+    ax.set_title(f"Per-Attempt Accuracy — {split_label} ({course})")
     ax.set_xticks(x)
     ax.set_xlim(0.5, max_attempts + 0.5)
     ax.set_ylim(0.4, 1.0)
@@ -181,25 +188,29 @@ def plot_course(course, models, max_attempts, output_dir):
 
     fig.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
-    out_path = os.path.join(output_dir, "filtered_accuracy_vs_attempt.png")
+    out_path = os.path.join(output_dir, "accuracy_vs_attempt.png")
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Plot saved: {out_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot per-attempt accuracy on filtered data")
-    parser.add_argument("--courses", nargs="+", default=ALL_COURSES)
-    parser.add_argument("--models", nargs="+", default=["IRT", "CIRT-Decay"])
+    parser = argparse.ArgumentParser(description="Plot per-attempt accuracy")
+    parser.add_argument("--courses", nargs="+", default=["dsa_hk231"])
+    parser.add_argument("--models", nargs="+", default=["IRT", "CIRT-Decay", "DynamicIRT", "BKT", "DKT"])
     parser.add_argument("--max_attempts", type=int, default=10)
+    parser.add_argument("--mode", choices=["student", "temporal"], default="student")
     args = parser.parse_args()
 
     for course in args.courses:
         print(f"\n{'=' * 60}")
         print(f"Course: {course}")
         print(f"{'=' * 60}")
-        output_dir = f"results/filtered_eval/{course}"
-        plot_course(course, args.models, args.max_attempts, output_dir)
+        if args.mode == "student":
+            output_dir = f"results/student_eval/{course}"
+        else:
+            output_dir = f"results/filtered_eval/{course}"
+        plot_course(course, args.models, args.max_attempts, output_dir, args.mode)
 
 
 if __name__ == "__main__":
