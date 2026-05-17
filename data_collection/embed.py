@@ -16,7 +16,7 @@ if __name__ == "__main__":
     
     upload_api = HfApi()
     data_folder = snapshot_download(
-        "stair-lab/code_insights_csv", 
+        "CodeInsightTeam/code_insights_csv", 
         repo_type="dataset",
     )
     main_data = pd.read_csv(f"{data_folder}/main_data.csv")
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     }
     dataset = Dataset.from_dict(output_dict)
     dataset.push_to_hub(
-        "stair-lab/code_insights_csv",
+        "CodeInsightTeam/code_insights_csv",
         "embeddings"
     )
     print("Embeddings uploaded")

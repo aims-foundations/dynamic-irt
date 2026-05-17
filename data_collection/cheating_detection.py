@@ -291,7 +291,7 @@ def main(repo_id, threshold=0.9):
 
 
 if __name__ == "__main__":
-    repo_id = "stair-lab/dsa_hk231_records"
+    repo_id = "CodeInsightTeam/dsa_hk231_records"
     data_folder = snapshot_download(repo_id=repo_id, repo_type="dataset")
 
     main(data_folder)

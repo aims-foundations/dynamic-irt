@@ -143,7 +143,7 @@ def build_item_to_question(course_name):
     """Return (n_items,) int tensor mapping each item index to its question index."""
     import pandas as pd
     data_folder = snapshot_download(
-        repo_id="stair-lab/code_insights_matrices", repo_type="dataset"
+        repo_id="CodeInsightTeam/code_insights_matrices", repo_type="dataset"
     )
     qinfo = pd.read_csv(os.path.join(data_folder, course_name, "question_infos.csv"))
     return torch.tensor(qinfo["qidx"].values, dtype=torch.long)
@@ -1043,7 +1043,7 @@ if __name__ == "__main__":
             item_to_question_raw = cache["item_to_question"]
         else:
             csv_folder = snapshot_download(
-                repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+                repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
             )
             main_data = pd.read_csv(
                 os.path.join(csv_folder, "main_data.csv"), low_memory=False
@@ -1076,7 +1076,7 @@ if __name__ == "__main__":
     else:
         # Load pre-built per-course matrices
         data_folder = snapshot_download(
-            repo_id="stair-lab/code_insights_matrices", repo_type="dataset"
+            repo_id="CodeInsightTeam/code_insights_matrices", repo_type="dataset"
         )
         data_folder = os.path.join(data_folder, args.course_name)
 

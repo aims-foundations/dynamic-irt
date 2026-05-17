@@ -8,7 +8,7 @@ from huggingface_hub import snapshot_download
 # ─── Configuration ─────────────────────────────────────────────────────────────
 # OUTPUT_URL = "https://huggingface.co/datasets/CodeInsightTeam/code_insights_csv/codeinsights_llm_simulation/resolve/main/"
 OUTPUT_URL = "./"
-REPO_ID    = "stair-lab/code_insights_csv"
+REPO_ID    = "CodeInsightTeam/code_insights_csv"
 DATA_DIR   = "data"
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────

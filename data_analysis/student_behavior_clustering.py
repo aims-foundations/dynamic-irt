@@ -79,7 +79,7 @@ def load_codeinsight_data():
     """
     # Try local cache first
     cache_path = os.path.expanduser(
-        "~/.cache/huggingface/hub/datasets--stair-lab--code_insights_csv/"
+        "~/.cache/huggingface/hub/datasets--CodeInsightTeam--code_insights_csv/"
         "snapshots/99d53fe7c11f6302fb28b82fab5ebd77c00e5d12"
     )
     if os.path.exists(cache_path):
@@ -91,7 +91,7 @@ def load_codeinsight_data():
         if hf_token:
             login(token=hf_token)
         path = snapshot_download(
-            repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+            repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
         )
 
     main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False)

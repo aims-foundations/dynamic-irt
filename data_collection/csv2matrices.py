@@ -1,11 +1,11 @@
 """
 Convert CSV data to PyTorch tensor matrices for IRT models.
 
-This script reads from the CSV dataset (stair-lab/code_insights_csv) and creates
+This script reads from the CSV dataset (CodeInsightTeam/code_insights_csv) and creates
 3D PyTorch tensors for use with GPIRT and other learning dynamics models.
 
 Input: CSV files from HuggingFace (main_data.csv, question_infos.csv, etc.)
-Output: PyTorch tensors uploaded to stair-lab/code_insights_matrices
+Output: PyTorch tensors uploaded to CodeInsightTeam/code_insights_matrices
     - correctness_matrix.pt: [n_students, n_questions*n_testcases, n_attempts]
     - time_matrix.pt: [n_students, n_questions*n_testcases, n_attempts]
     - is_exam_matrix.pt: [n_students, n_questions*n_testcases, n_attempts]
@@ -53,7 +53,7 @@ def load_csv_data(course_name):
     """Load CSV data from HuggingFace."""
     # Try local cache first
     cache_path = os.path.expanduser(
-        "~/.cache/huggingface/hub/datasets--stair-lab--code_insights_csv/"
+        "~/.cache/huggingface/hub/datasets--CodeInsightTeam--code_insights_csv/"
         "snapshots/99d53fe7c11f6302fb28b82fab5ebd77c00e5d12"
     )
     if os.path.exists(cache_path):
@@ -61,7 +61,7 @@ def load_csv_data(course_name):
         path = cache_path
     else:
         path = snapshot_download(
-            repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+            repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
         )
 
     main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False)
@@ -229,7 +229,7 @@ def build_matrices(main_data, question_infos, course_name, device):
 def upload_matrices(course_name, student_info, question_info, correctness_matrix, time_matrix, is_exam_matrix):
     """Upload matrices to HuggingFace."""
     upload_api = HfApi()
-    repo_id = "stair-lab/code_insights_matrices"
+    repo_id = "CodeInsightTeam/code_insights_matrices"
 
     print(f"Uploading matrices for {course_name}...")
     print(f"  Correctness: {correctness_matrix.shape}")

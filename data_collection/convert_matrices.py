@@ -177,7 +177,7 @@ if __name__ == "__main__":
 
     # Download and load data
     data_folder = snapshot_download(
-        repo_id=f"stair-lab/{args.course_name}_records_wtc", repo_type="dataset"
+        repo_id=f"CodeInsightTeam/{args.course_name}_records_wtc", repo_type="dataset"
     )
     directory_json_files = {}
     for folder in os.listdir(data_folder):
@@ -227,4 +227,4 @@ if __name__ == "__main__":
     with open("data/response_matrix.pkl", "wb") as file:
         pickle.dump(response_matrix, file)
 
-    upload_files(f"stair-lab/{args.course_name}_wtc", matrices)
+    upload_files(f"CodeInsightTeam/{args.course_name}_wtc", matrices)

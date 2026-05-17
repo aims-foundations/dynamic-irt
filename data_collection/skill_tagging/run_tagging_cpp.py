@@ -214,7 +214,7 @@ def main():
         # Try to load from HuggingFace
         try:
             data_folder = snapshot_download(
-                repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+                repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
             )
             # Look for questions file
             questions_file = os.path.join(data_folder, "questions.csv")

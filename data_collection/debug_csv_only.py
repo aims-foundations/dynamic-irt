@@ -12,7 +12,7 @@ def main():
 
     # Load existing matrices
     existing_path = snapshot_download(
-        repo_id="stair-lab/code_insights_matrices",
+        repo_id="CodeInsightTeam/code_insights_matrices",
         repo_type="dataset",
         token=hf_token
     )
@@ -22,11 +22,11 @@ def main():
 
     # Load CSV data
     csv_cache_path = os.path.expanduser(
-        "~/.cache/huggingface/hub/datasets--stair-lab--code_insights_csv/"
+        "~/.cache/huggingface/hub/datasets--CodeInsightTeam--code_insights_csv/"
         "snapshots/99d53fe7c11f6302fb28b82fab5ebd77c00e5d12"
     )
     csv_path = csv_cache_path if os.path.exists(csv_cache_path) else snapshot_download(
-        repo_id="stair-lab/code_insights_csv", repo_type="dataset", token=hf_token
+        repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset", token=hf_token
     )
 
     main_data = pd.read_csv(f"{csv_path}/main_data.csv", low_memory=False)
