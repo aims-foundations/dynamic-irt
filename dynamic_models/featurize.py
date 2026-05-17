@@ -12,7 +12,7 @@ Usage:
 
     # LLM embeddings
     python -m dynamic_irt.featurize --mode embeddings \
-        --dataset stair-lab/dsa_hk231_wtc_per_student_sft_lf_splited \
+        --dataset CodeInsightTeam/dsa_hk231_wtc_per_student_sft_lf_splited \
         --cls train --model /path/to/Llama-3.1-8B-embedding
 """
 
@@ -136,7 +136,7 @@ def remove_decimal_if_whole(val):
 def load_csv_data(course):
     """Download and load CSV data from HuggingFace."""
     path = snapshot_download(
-        repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+        repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
     )
     main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False)
     question_infos = pd.read_csv(f"{path}/question_infos.csv")
@@ -449,7 +449,7 @@ def run_embedding_mode(args):
     tokenizer = AutoTokenizer.from_pretrained(args.model)
 
     data_folder = snapshot_download(
-        repo_id="stair-lab/dsa_hk231_wtc", repo_type="dataset"
+        repo_id="CodeInsightTeam/dsa_hk231_wtc", repo_type="dataset"
     )
     question_infos = pickle.load(open(f"{data_folder}/unique_questions.pkl", "rb"))
     question_name2idx = pickle.load(open(f"{data_folder}/question_name2idx.pkl", "rb"))
@@ -570,7 +570,7 @@ if __name__ == "__main__":
 
     # Embedding mode args
     parser.add_argument("--dataset", type=str,
-                        default="stair-lab/dsa_hk231_wtc_per_student_sft_lf_splited",
+                        default="CodeInsightTeam/dsa_hk231_wtc_per_student_sft_lf_splited",
                         help="HuggingFace dataset (embeddings mode)")
     parser.add_argument("--cls", type=str, default="train",
                         help="Dataset split (embeddings mode)")

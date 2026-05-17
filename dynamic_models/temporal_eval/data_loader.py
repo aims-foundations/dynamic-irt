@@ -57,7 +57,7 @@ def load_unified_data(course_name: str = "dsa_hk231") -> UnifiedData:
     """
     # Load raw CSV
     csv_path = snapshot_download(
-        repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+        repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
     )
     main_data = pd.read_csv(f"{csv_path}/main_data.csv", low_memory=False)
     question_infos_csv = pd.read_csv(f"{csv_path}/question_infos.csv")
@@ -84,7 +84,7 @@ def load_unified_data(course_name: str = "dsa_hk231") -> UnifiedData:
     else:
         # Load pre-built tensors
         mat_path = snapshot_download(
-            repo_id="stair-lab/code_insights_matrices", repo_type="dataset"
+            repo_id="CodeInsightTeam/code_insights_matrices", repo_type="dataset"
         )
         course_dir = f"{mat_path}/{course_name}"
         correctness = torch.load(

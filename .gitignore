@@ -15,6 +15,7 @@ myenv/
 *.jpg
 *.jpeg
 *.gif
+*.md
 
 # Model/output directories
 dynamic_irt/gpirt/archived*
@@ -25,3 +26,15 @@ llm_simulator/results/
 llm_simulator/saves/
 llm_simulator/helm/
 results/
+.cache/
+
+# LaTeX build artifacts
+*.pdf
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk

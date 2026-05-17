@@ -167,12 +167,12 @@ pip install huggingface-hub python-Levenshtein tueplots
 ## Data Source
 
 All scripts load data from HuggingFace:
-- **Repository**: `stair-lab/code_insights_csv`
+- **Repository**: `CodeInsightTeam/code_insights_csv`
 - **Files**: `main_data.csv`, `question_infos.csv`, `course_infos.csv`
 
 Data is cached locally at:
 ```
-~/.cache/huggingface/hub/datasets--stair-lab--code_insights_csv/
+~/.cache/huggingface/hub/datasets--CodeInsightTeam--code_insights_csv/
 ```
 
 ## Integration with Paper

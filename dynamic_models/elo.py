@@ -4,7 +4,7 @@ Elo-based IRT for CodeInsights dataset (D1 human data).
 Runs a standard Elo rating model that jointly updates student ability (theta)
 and item difficulty (b) after each interaction.
 
-Data is loaded from HuggingFace (stair-lab/code_insights_csv).
+Data is loaded from HuggingFace (CodeInsightTeam/code_insights_csv).
 Results are saved to CodeInsights/results/elo/.
 
 Usage:
@@ -144,7 +144,7 @@ def load_data():
         print("Warning: HF_TOKEN not set. Using cached credentials if available.")
 
     path = snapshot_download(
-        repo_id="stair-lab/code_insights_csv", repo_type="dataset"
+        repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
     )
     code_insights = pd.read_csv(f"{path}/main_data.csv")
 
@@ -400,7 +400,7 @@ if __name__ == "__main__":
     # Save metrics
     # ------------------------------------------------------------------
     all_metrics["data_summary"] = {
-        "source": "stair-lab/code_insights_csv",
+        "source": "CodeInsightTeam/code_insights_csv",
         "n_records": len(ci_data),
         "n_students": int(ci_data["StudentID_SF"].nunique()),
         "n_items": int(ci_data["ItemID_SF"].nunique()),

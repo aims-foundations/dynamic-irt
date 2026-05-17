@@ -22,9 +22,9 @@ from huggingface_hub import snapshot_download
 
 logger = logging.getLogger(__name__)
 
-HF_REPO_ID = "stair-lab/code_insights_csv"
+HF_REPO_ID = "CodeInsightTeam/code_insights_csv"
 DATA_URL = (
-    "https://huggingface.co/datasets/stair-lab/code_insights_csv/"
+    "https://huggingface.co/datasets/CodeInsightTeam/code_insights_csv/"
     "resolve/main/"
 )
 

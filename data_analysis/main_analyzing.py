@@ -265,7 +265,7 @@ def main():
     wandb.init(project="student-score-analysis")
 
     directory = snapshot_download(
-        repo_id=f"stair-lab/{args.course_name}_records", repo_type="dataset"
+        repo_id=f"CodeInsightTeam/{args.course_name}_records", repo_type="dataset"
     )
 
     os.makedirs("plots", exist_ok=True)

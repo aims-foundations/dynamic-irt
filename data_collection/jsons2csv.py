@@ -12,7 +12,7 @@ if __name__ == "__main__":
 
     # Download and load data
     origin_data_folder = snapshot_download(
-        repo_id=f"stair-lab/code_insights_jsons", repo_type="dataset"
+        repo_id=f"CodeInsightTeam/code_insights_jsons", repo_type="dataset"
     )
 
     # Load data
@@ -266,7 +266,7 @@ if __name__ == "__main__":
     data_dict_file = io.BytesIO()
     df.to_csv(data_dict_file, index=False)
     upload_api.upload_file(
-        repo_id=f"stair-lab/code_insights_csv",
+        repo_id=f"CodeInsightTeam/code_insights_csv",
         repo_type="dataset",
         path_in_repo="main_data.csv",
         path_or_fileobj=data_dict_file,
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     student_infos_file = io.BytesIO()
     df.to_csv(student_infos_file, index=False)
     upload_api.upload_file(
-        repo_id=f"stair-lab/code_insights_csv",
+        repo_id=f"CodeInsightTeam/code_insights_csv",
         repo_type="dataset",
         path_in_repo="student_infos.csv",
         path_or_fileobj=student_infos_file,
@@ -286,7 +286,7 @@ if __name__ == "__main__":
     course_infos_file = io.BytesIO()
     df.to_csv(course_infos_file, index=False)
     upload_api.upload_file(
-        repo_id=f"stair-lab/code_insights_csv",
+        repo_id=f"CodeInsightTeam/code_insights_csv",
         repo_type="dataset",
         path_in_repo="course_infos.csv",
         path_or_fileobj=course_infos_file,
@@ -296,7 +296,7 @@ if __name__ == "__main__":
     section_infos_file = io.BytesIO()
     df.to_csv(section_infos_file, index=False)
     upload_api.upload_file(
-        repo_id=f"stair-lab/code_insights_csv",
+        repo_id=f"CodeInsightTeam/code_insights_csv",
         repo_type="dataset",
         path_in_repo="section_infos.csv",
         path_or_fileobj=section_infos_file,
@@ -306,7 +306,7 @@ if __name__ == "__main__":
     question_infos_file = io.BytesIO()
     df.to_csv(question_infos_file, index=False)
     upload_api.upload_file(
-        repo_id=f"stair-lab/code_insights_csv",
+        repo_id=f"CodeInsightTeam/code_insights_csv",
         repo_type="dataset",
         path_in_repo="question_infos.csv",
         path_or_fileobj=question_infos_file,
