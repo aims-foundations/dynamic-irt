@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -20,6 +20,18 @@ class PredictionResult:
     # Optional metadata for diagnostic breakdown
     student_indices: Optional[np.ndarray] = None
     item_indices: Optional[np.ndarray] = None
+    testcase_indices: Optional[np.ndarray] = None
+    attempt_indices: Optional[np.ndarray] = None
+
+    # Training diagnostics
+    losses: Optional[Dict[str, List[float]]] = None  # e.g. {"train": [...], "test": [...]}
+
+    # Learned parameter distributions (param_name -> 1D array of values)
+    student_params: Optional[Dict[str, np.ndarray]] = None
+    item_params: Optional[Dict[str, np.ndarray]] = None
+
+    # Serializable model state for saving/loading trained models
+    model_state: Optional[Dict] = None
 
     @property
     def n_observations(self) -> int:
@@ -51,7 +63,22 @@ class ModelAdapter(ABC):
         """
         ...
 
+    def fit_and_predict_student_split(
+        self,
+        data: "UnifiedData",
+        split: "StudentSplit",
+        seed: int = 42,
+        **kwargs,
+    ) -> PredictionResult:
+        """Train on train students, calibrate test students, predict.
+
+        Training: learn item params from train students (all weeks).
+        Calibration: estimate test student ability from weeks 1..W.
+        Prediction: predict test students' weeks W+1..end.
+        """
+        raise NotImplementedError(f"{self.name} does not support student splits")
+
     @abstractmethod
-    def estimated_runtime_minutes(self, data: UnifiedData) -> float:
+    def estimated_runtime_minutes(self, data: "UnifiedData") -> float:
         """Rough runtime estimate so the harness can plan."""
         ...

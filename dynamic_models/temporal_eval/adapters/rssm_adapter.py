@@ -43,18 +43,24 @@ class RSSMAdapter(ModelAdapter):
         dropout: float = 0.2,
         lr: float = 1e-3,
         weight_decay: float = 1e-4,
-        epochs: int = 1500,
-        patience: int = 200,
+        epochs: int = 500,
+        patience: int = 100,
         grad_clip: float = 1.0,
         aux_loss_weight: float = 0.1,
         **kwargs,
     ) -> PredictionResult:
         torch.manual_seed(seed)
         np.random.seed(seed)
-        device = kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            default_device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            default_device = "mps"
+        else:
+            default_device = "cpu"
+        device = kwargs.get("device", default_device)
 
-        from dynamic_irt.featurize import FeatureConfig
-        from dynamic_irt.rssm import (
+        from dynamic_models.featurize import FeatureConfig
+        from dynamic_models.rssm import (
             AnswerEncoder,
             AuxDecoder as AnswerFeaturePredictor,
             Scorer as MultiModalScorer,
@@ -130,7 +136,7 @@ class RSSMAdapter(ModelAdapter):
             test_seqs.append((test_feats, test_qidxs, test_tcs))
 
         n_students = len(train_seqs)
-        max_seq_cap = kwargs.get("max_seq_len", 1000)
+        max_seq_cap = kwargs.get("max_seq_len", 600)
         for i in range(len(train_seqs)):
             feats, qidxs, tcs = train_seqs[i]
             if len(feats) > max_seq_cap:
@@ -187,7 +193,7 @@ class RSSMAdapter(ModelAdapter):
         ).to(device)
 
         print(f"    RSSM data: {n_students} students, "
-              f"train_len={max_train}, test_len={max_test}")
+              f"train_len={max_train}, test_len={max_test}, device={device}", flush=True)
 
         # Build model components separately for batched processing
         ans_encoder = AnswerEncoder(answer_dim, enc_dim, dropout=dropout).to(device)
@@ -195,7 +201,7 @@ class RSSMAdapter(ModelAdapter):
             n_questions,
             q_emb_dim=config.question_emb_dim,
             static_dim=config.question_static_dim,
-            hidden_dim=enc_dim,
+            enc_dim=enc_dim,
             dropout=dropout,
         ).to(device)
         gru = nn.GRU(
@@ -270,26 +276,25 @@ class RSSMAdapter(ModelAdapter):
             if not training:
                 return scores, h_final
 
-            # BCE loss on valid testcases
-            tc_valid = tc_b != -1
+            # BCE loss on valid testcases (masked reduction to avoid MPS boolean indexing bugs)
+            tc_valid = (tc_b != -1).float()
             n_valid_tc = tc_valid.sum().item()
             if n_valid_tc > 0:
-                bce_loss = F.binary_cross_entropy(
-                    scores[tc_valid], tc_b[tc_valid], reduction="sum"
+                bce_per_elem = F.binary_cross_entropy(
+                    scores, tc_b.clamp(0, 1), reduction="none"
                 )
+                bce_loss = (bce_per_elem * tc_valid).sum()
             else:
                 bce_loss = torch.tensor(0.0, device=device)
 
-            # Auxiliary feature prediction loss
+            # Auxiliary feature prediction loss (masked reduction)
             feat_hat = aux_predictor(
                 hidden_out.reshape(BT, hidden_dim)
             ).reshape(B, T, answer_dim)
-            valid = mask_b.unsqueeze(-1).expand_as(feat_hat)
+            valid = mask_b.unsqueeze(-1).expand_as(feat_hat).float()
             n_valid_mask = valid.sum().item()
             if n_valid_mask > 0:
-                aux_loss = F.mse_loss(
-                    feat_hat[valid], feat_b[valid], reduction="sum"
-                )
+                aux_loss = ((feat_hat - feat_b) ** 2 * valid).sum()
             else:
                 aux_loss = torch.tensor(0.0, device=device)
 
@@ -300,6 +305,8 @@ class RSSMAdapter(ModelAdapter):
         best_epoch = 0
         best_state = None
         n_batches = (n_students + student_batch_size - 1) // student_batch_size
+
+        train_losses = []
 
         for epoch in range(epochs):
             ans_encoder.train()
@@ -346,6 +353,8 @@ class RSSMAdapter(ModelAdapter):
             avg_aux = total_aux / max(total_mask_count, 1)
             avg_loss = avg_bce + aux_loss_weight * avg_aux
 
+            train_losses.append(avg_loss)
+
             if avg_loss < best_loss:
                 best_loss = avg_loss
                 best_epoch = epoch
@@ -359,12 +368,12 @@ class RSSMAdapter(ModelAdapter):
 
             if epoch - best_epoch >= patience:
                 print(f"    RSSM early stop at epoch {epoch} "
-                      f"(best={best_loss:.4f}@{best_epoch})")
+                      f"(best={best_loss:.4f}@{best_epoch})", flush=True)
                 break
 
-            if epoch % 100 == 0:
+            if epoch % 50 == 0:
                 print(f"    RSSM epoch {epoch}: loss={avg_loss:.4f} "
-                      f"(best={best_loss:.4f}@{best_epoch})")
+                      f"(best={best_loss:.4f}@{best_epoch})", flush=True)
 
         # Restore best model
         if best_state is not None:
@@ -373,6 +382,11 @@ class RSSMAdapter(ModelAdapter):
             gru.load_state_dict(best_state["gru"])
             scorer.load_state_dict(best_state["scorer"])
             aux_predictor.load_state_dict(best_state["aux"])
+
+        # Extract question embedding norms as item parameter
+        with torch.no_grad():
+            q_emb_weights = q_encoder.q_embedding.weight.cpu().numpy()
+            q_emb_norms = np.linalg.norm(q_emb_weights, axis=1)
 
         # Inference — mini-batched, no gradients
         ans_encoder.eval()
@@ -427,11 +441,28 @@ class RSSMAdapter(ModelAdapter):
         # tc_mask shape: [n_students, max_test, n_tc]
         valid_coords = tc_mask.nonzero(as_tuple=False)  # [N_valid, 3]
         test_student_indices = valid_coords[:, 0].numpy()
-        # Map test sequence position to question index
         test_seq_pos = valid_coords[:, 1].numpy()
+        test_tc_indices = valid_coords[:, 2].numpy()
         test_item_indices = test_qidx_t[
             valid_coords[:, 0], valid_coords[:, 1]
         ].numpy()
+
+        # Compute per-(student, question) attempt numbers from sequence position
+        test_attempt_indices = np.zeros(len(test_student_indices), dtype=int)
+        prev_key = None
+        attempt = 0
+        prev_seq_pos = -1
+        for i in range(len(test_student_indices)):
+            key = (test_student_indices[i], test_item_indices[i])
+            seq_pos = test_seq_pos[i]
+            if key != prev_key:
+                attempt = 0
+                prev_key = key
+                prev_seq_pos = seq_pos
+            elif seq_pos != prev_seq_pos:
+                attempt += 1
+                prev_seq_pos = seq_pos
+            test_attempt_indices[i] = attempt
 
         if len(y_true) == 0:
             raise ValueError(
@@ -443,7 +474,24 @@ class RSSMAdapter(ModelAdapter):
             y_pred_prob=y_pred_prob,
             student_indices=test_student_indices,
             item_indices=test_item_indices,
+            testcase_indices=test_tc_indices,
+            attempt_indices=test_attempt_indices,
+            losses={"train": train_losses},
+            item_params={
+                "question embedding norm": q_emb_norms,
+            },
+            model_state={
+                "ans_encoder": ans_encoder.state_dict(),
+                "q_encoder": q_encoder.state_dict(),
+                "gru": gru.state_dict(),
+                "scorer": scorer.state_dict(),
+                "aux_predictor": aux_predictor.state_dict(),
+                "hidden_dim": hidden_dim,
+                "enc_dim": enc_dim,
+                "n_questions": n_questions,
+                "best_epoch": best_epoch,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:
-        return 15.0
+        return 30.0

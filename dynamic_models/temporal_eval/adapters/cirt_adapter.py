@@ -33,7 +33,12 @@ class CIRTAdapter(ModelAdapter):
     ) -> PredictionResult:
         torch.manual_seed(seed)
         np.random.seed(seed)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
 
         N = data.n_students
         T = data.n_max_attempts
@@ -47,7 +52,7 @@ class CIRTAdapter(ModelAdapter):
         valid_mask = (y_flat != -1).numpy()
         valid_indices = np.where(valid_mask)[0]
 
-        t_vals = np.linspace(1, T, T)
+        t_vals = np.linspace(1, T, T, dtype=np.float32)
         student_idx_np = valid_indices // (Q_train * T)
         # question_idx is local to train items (0..Q_train-1)
         question_idx_np = (valid_indices // T) % Q_train
@@ -69,6 +74,7 @@ class CIRTAdapter(ModelAdapter):
 
         optimizer = optim.Adam([theta0, theta1, z_train], lr=lr)
 
+        train_losses = []
         for epoch in range(epochs):
             optimizer.zero_grad()
 
@@ -96,6 +102,12 @@ class CIRTAdapter(ModelAdapter):
             loss = nll + cost
             loss.backward()
             optimizer.step()
+            train_losses.append(loss.item())
+
+        # ---- Extract learned parameters ----
+        theta0_np = theta0.detach().cpu().numpy()
+        theta1_np = torch.sigmoid(theta1).detach().cpu().numpy()
+        z_np = z_train.detach().cpu().numpy()
 
         # ---- Predict on test items ----
         test_corr = data.correctness_matrix[:, split.test_item_indices, :]
@@ -135,6 +147,21 @@ class CIRTAdapter(ModelAdapter):
             y_pred_prob=y_pred_prob,
             student_indices=test_student_idx,
             item_indices=test_item_idx,
+            losses={"train": train_losses},
+            student_params={
+                "theta_0 (learning rate)": theta0_np,
+                "theta_1 (asymptotic ability)": theta1_np,
+            },
+            item_params={
+                "z (difficulty)": z_np,
+            },
+            model_state={
+                "theta0": theta0.detach().cpu(),
+                "theta1": theta1.detach().cpu(),
+                "z_train": z_train.detach().cpu(),
+                "concentration": concentration,
+                "epochs": epochs,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:
