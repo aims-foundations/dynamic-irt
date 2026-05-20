@@ -1,6 +1,6 @@
 # Dynamic Measurement Model
 
-A research project focused on measuring unobserved quantities that change over time, such as latent ability during learning. The project combines probabilistic latent dynamic models (IRT, CIRT, BKT, DKT) with LLM-based prediction to model student learning trajectories from programming submissions. All models share a student-split evaluation framework, enabling direct comparison on identical data splits.
+A research project focused on measuring unobserved quantities that change over time, such as latent ability during learning. The project combines probabilistic latent dynamic models (IRT, CIRT, BKT, DKT) with LLM-based prediction to model student learning trajectories from programming submissions. All models share a common evaluation framework, enabling direct comparison on identical data splits.
 
 Related paper: https://aclanthology.org/2025.aimecon-main.43.pdf
 
@@ -47,16 +47,10 @@ export HF_TOKEN="..."
 │   └── pace_analysis.py                   # Submission pacing
 │
 ├── dynamic_models/            # Probabilistic latent dynamic models
-│   ├── cirt.py                # Continuous IRT (temporal decay)
-│   ├── dynamic_irt.py         # Dynamic IRT (time-varying traits)
-│   ├── elo.py                 # Elo rating system
-│   ├── gpirt.py               # Gaussian Process IRT
-│   ├── rssm.py                # Recurrent State-Space Model
-│   ├── featurize.py           # Feature extraction
 │   └── temporal_eval/         # Evaluation framework
-│       ├── run_student_eval.py    # Entry point: student-split evaluation
+│       ├── run_student_eval.py    # Entry point: 
 │       ├── harness.py             # Orchestrates model fitting + prediction
-│       ├── student_split.py       # 70/30 student split logic
+│       ├── student_split.py       # data split logic
 │       ├── data_filter.py         # Quality filtering (coverage, pass rates)
 │       ├── data_loader.py         # Unified data loading + caching
 │       ├── metrics.py             # AUC, accuracy, F1, log-likelihood
@@ -97,9 +91,6 @@ python -m dynamic_models.temporal_eval.run_student_eval
 
 # Specific models on a specific course
 python -m dynamic_models.temporal_eval.run_student_eval --models IRT BKT DKT --courses dsa_hk231
-
-# With loss curve plots
-python -m dynamic_models.temporal_eval.run_student_eval --plot_losses
 ```
 
 Results saved to `results/student_eval/{course}/student_eval.csv`.
@@ -117,7 +108,7 @@ The simulator uses the same student split as the knowledge-tracing models. For e
 5. The predicted code is compiled and **graded** against unit tests
 
 ### Supported Models
-Commercial: `opus` (Claude Opus), `haiku` (Claude Haiku), `gpt` (GPT-4.1-nano), `gemini` (Gemini 2.0 Flash), `mistral` (Mistral Large).
+Commercial: `opus` (Claude Opus 4.6), `haiku` (Claude Haiku), `gpt` (GPT-4.1-nano), `gemini` (Gemini 2.0 Flash), `mistral` (Mistral Large).
 Open-source (via vLLM): `llama` (Llama-3.1-8B), `gemma` (Gemma-3-27B), `qwen` (Qwen2.5-14B), `glm` (GLM-4.7-AWQ).
 
 ```bash
