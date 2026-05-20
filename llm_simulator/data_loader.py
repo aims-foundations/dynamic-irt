@@ -1,32 +1,24 @@
-"""Unified data loading for LLM student simulation.
+"""Data structures, loading, and utilities for LLM student simulation.
 
-Loads scenario data from local CSVs (produced by data_preprocessing.py)
-or directly from HuggingFace, and produces a list of EvalItem objects
-ready for prompt building.
-
-Key idea: one loader, parameterized by n_examples.
-    - n_examples=0  → one item per question (zero-shot)
-    - n_examples=N  → trajectory-based: for each (student, question),
-      provide the student's N most recent prior questions (with all
-      attempts on each) as context
+Defines EvalItem, Example dataclasses, test-case parsing, and the
+student-split data loader that bridges the psychometric evaluation
+framework to LLM eval items.
 """
 
 import logging
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from huggingface_hub import snapshot_download
+
+from dynamic_models.temporal_eval.data_loader import UnifiedData, load_student_split_data
+from dynamic_models.temporal_eval.student_split import StudentSplit
 
 logger = logging.getLogger(__name__)
 
 HF_REPO_ID = "CodeInsightTeam/code_insights_csv"
-DATA_URL = (
-    "https://huggingface.co/datasets/CodeInsightTeam/code_insights_csv/"
-    "resolve/main/"
-)
 
 
 # ── Data structures ──────────────────────────────────────────────────────────
@@ -53,6 +45,7 @@ class EvalItem:
     question_template: str
     question_unittests: str
     examples: List[Example] = field(default_factory=list)
+    target_timestamp: Optional[str] = None  # timestamp of the target submission (for temporal filtering)
 
 
 # ── Test-case parsing (for iterative feedback) ──────────────────────────────
@@ -103,256 +96,278 @@ def infer_public_test_counts(main_df: pd.DataFrame) -> Dict[str, int]:
     return n_public
 
 
-# ── Internal helpers ─────────────────────────────────────────────────────────
+# ── Item difficulty ──────────────────────────────────────────────────────────
 
 
-def _load_csv(filename: str, data_dir: str = "data") -> pd.DataFrame:
-    """Load a CSV from local directory or HuggingFace."""
-    local = Path(data_dir) / filename
-    if local.exists():
-        logger.info("Loading local: %s", local)
-        return pd.read_csv(local)
-    url = f"{DATA_URL}data/{filename}"
-    logger.info("Loading from HuggingFace: %s", url)
-    return pd.read_csv(url)
+@dataclass
+class ItemDifficulty:
+    question_id: int
+    question_name: str
+    topic: str
+    train_pass_rate: float
+    avg_attempts_to_pass: float
+    fraction_eventually_pass: float
+    n_train_students_attempted: int
 
 
-def _load_hf_main_data() -> pd.DataFrame:
-    """Load main_data.csv from HuggingFace (for public test counts + full data)."""
-    hf_dir = snapshot_download(repo_id=HF_REPO_ID, repo_type="dataset")
-    return pd.read_csv(
-        os.path.join(hf_dir, "main_data.csv"), dtype={"pass": str}
+def _load_hf_question_details() -> pd.DataFrame:
+    """Load full question metadata (text, template, unittests) from HuggingFace."""
+    hf_dir = snapshot_download(
+        repo_id=HF_REPO_ID,
+        repo_type="dataset", local_files_only=True,
     )
+    return pd.read_csv(f"{hf_dir}/question_infos.csv")
 
 
-def _load_hf_questions() -> pd.DataFrame:
-    """Load question_infos.csv from HuggingFace."""
-    hf_dir = snapshot_download(repo_id=HF_REPO_ID, repo_type="dataset")
-    return pd.read_csv(os.path.join(hf_dir, "question_infos.csv"))
+def _compute_item_difficulty(
+    data: UnifiedData, split: StudentSplit,
+) -> Dict[str, ItemDifficulty]:
+    """Compute per-question difficulty stats from train students only."""
+    corr = data.correctness_matrix
+    qi = data.question_infos
 
+    unique_qnames = qi.drop_duplicates(subset=["qname"])
+    difficulties = {}
 
-# ── Main loader ──────────────────────────────────────────────────────────────
+    for _, row in unique_qnames.iterrows():
+        qname = row["qname"]
+        item_mask = qi["qname"] == qname
+        item_indices = np.where(item_mask)[0]
 
-
-def load_eval_items(
-    n_examples: int = 0,
-    data_dir: str = "data",
-    max_samples: Optional[int] = None,
-    max_students: Optional[int] = None,
-    max_questions: Optional[int] = None,
-    seed: int = 42,
-) -> List[EvalItem]:
-    """Load evaluation items for the LLM simulator.
-
-    Parameters
-    ----------
-    n_examples : int
-        Number of previous questions to use as context.  0 = zero-shot (one
-        item per question).  N > 0 = trajectory-based: for each (student,
-        question), provide the student's N most recent prior questions (with
-        ALL attempts on each) as in-context examples.
-    data_dir : str
-        Local directory containing scenario CSVs from data_preprocessing.py.
-    max_samples : int, optional
-        Limit the total number of items returned (for quick testing).
-    max_students : int, optional
-        Randomly sample this many students (for few-shot/trajectory mode).
-    max_questions : int, optional
-        Randomly sample this many questions (for few-shot/trajectory mode).
-    seed : int
-        Random seed for reproducible sampling (default: 42).
-
-    Returns
-    -------
-    list of EvalItem
-    """
-    if n_examples == 0:
-        items = _load_zero_shot(data_dir)
-    else:
-        items = _load_trajectory(
-            n_examples, max_students=max_students,
-            max_questions=max_questions, seed=seed,
-        )
-
-    if max_samples and len(items) > max_samples:
-        items = items[:max_samples]
-    return items
-
-
-def _load_zero_shot(data_dir: str) -> List[EvalItem]:
-    """Load one item per unique question (zero-shot, old S1)."""
-    df = _load_csv("Scenario1_full_data.csv", data_dir)
-    items = []
-    for _, row in df.groupby("question_unittest_id").first().reset_index().iterrows():
-        items.append(EvalItem(
-            question_id=str(row["question_unittest_id"]),
-            student_id=None,
-            question_name=row["question_name"],
-            question_text=row["question_text"],
-            question_template=row["question_template"],
-            question_unittests=row.get("question_unittests", ""),
-        ))
-    return items
-
-
-def _load_trajectory(
-    n_examples: int,
-    max_students: Optional[int] = None,
-    max_questions: Optional[int] = None,
-    seed: int = 42,
-) -> List[EvalItem]:
-    """Load trajectory-based items from full submission history.
-
-    For each student's last submission on each sampled question, provide the
-    student's N most recent prior *questions* (with ALL attempts on each) as
-    in-context examples.  This shows the LLM both the student's coding style
-    and their debugging/iteration process.
-
-    Parameters
-    ----------
-    n_examples : int
-        Number of previous questions to include (each with all attempts).
-    max_students, max_questions : int, optional
-        Randomly sample this many students/questions for prediction targets.
-    seed : int
-        Random seed for reproducible sampling.
-    """
-    logger.info("Loading full submission data from HuggingFace…")
-    main_df = _load_hf_main_data()
-    q_df = _load_hf_questions()
-
-    # Keep Prechecked + Submit responses, merge question info
-    subs = main_df.dropna(subset=["response"]).copy()
-    subs = subs[subs["response_type"].isin(["Prechecked", "Submit"])].sort_values("timestamp")
-
-    q_cols = [
-        "question_id", "question_name", "question_text",
-        "question_template", "question_unittests",
-    ]
-    merged = subs.merge(
-        q_df[q_cols],
-        left_on="question_unittest_id",
-        right_on="question_id",
-        how="inner",
-    )
-
-    # Sample students and questions independently (unbiased)
-    all_students = merged["student_id"].unique()
-    all_questions = merged["question_unittest_id"].unique()
-
-    if max_students and max_students < len(all_students):
-        sampled_students = (
-            pd.Series(all_students)
-            .sample(n=max_students, random_state=seed)
-            .values
-        )
-    else:
-        sampled_students = all_students
-
-    if max_questions and max_questions < len(all_questions):
-        sampled_questions = (
-            pd.Series(all_questions)
-            .sample(n=max_questions, random_state=seed + 1)
-            .values
-        )
-    else:
-        sampled_questions = all_questions
-
-    logger.info(
-        "Sampled %d students, %d questions",
-        len(sampled_students), len(sampled_questions),
-    )
-
-    # Keep full history for sampled students (needed for trajectory context)
-    student_data = merged[merged["student_id"].isin(sampled_students)].copy()
-    student_data = student_data.sort_values(["student_id", "timestamp"])
-
-    sampled_q_set = set(sampled_questions)
-
-    # Pre-group by student for fast lookup
-    logger.info("Building trajectory items for %d students…", len(sampled_students))
-    items = []
-    n_processed = 0
-
-    for student_id, student_df in student_data.groupby("student_id"):
-        # Convert to list of dicts once (much faster than iterrows)
-        rows = student_df.to_dict("records")
-        if not rows:
+        # Only use test items (weeks 4+) — these are the prediction targets
+        test_item_set = set(split.test_item_indices.tolist())
+        target_indices = [i for i in item_indices if i in test_item_set]
+        if not target_indices:
             continue
 
-        # Group rows by question_id for fast lookup
-        q_rows: Dict[str, list] = {}
-        for r in rows:
-            qid = r["question_unittest_id"]
-            q_rows.setdefault(qid, []).append(r)
+        # Train students' observations on these items
+        train_corr = corr[split.train_student_indices][:, target_indices, :]
+        n_train = len(split.train_student_indices)
 
-        # Find target questions (last submission per sampled question)
-        targets: Dict[str, dict] = {}
-        for r in rows:
-            qid = r["question_unittest_id"]
-            if qid in sampled_q_set:
-                targets[qid] = r  # last one wins (rows sorted by timestamp)
+        # Per train student: did they eventually pass all testcases?
+        students_attempted = 0
+        students_passed = 0
+        total_attempts_to_pass = []
 
-        for target_qid, target in targets.items():
-            target_time = target["timestamp"]
+        for s in range(n_train):
+            student_obs = train_corr[s]  # [n_target_items, n_attempts]
+            has_obs = (student_obs != -1).any()
+            if not has_obs:
+                continue
+            students_attempted += 1
 
-            # Find unique OTHER questions attempted before target_time
-            # Track the latest timestamp per prior question
-            prior_latest: Dict[str, str] = {}
-            for r in rows:
-                if r["timestamp"] >= target_time:
+            # Check if student eventually passed all testcases
+            all_passed = True
+            for tc in range(len(target_indices)):
+                tc_obs = student_obs[tc]
+                valid = tc_obs[tc_obs != -1]
+                if len(valid) == 0 or valid[-1] != 1:
+                    all_passed = False
                     break
-                qid = r["question_unittest_id"]
-                if qid != target_qid:
-                    prior_latest[qid] = r["timestamp"]
 
-            if not prior_latest:
+            if all_passed:
+                students_passed += 1
+                # Count attempts to first all-pass
+                for a in range(student_obs.shape[1]):
+                    attempt_vals = student_obs[:, a]
+                    if (attempt_vals == 1).all():
+                        total_attempts_to_pass.append(a + 1)
+                        break
+
+        if students_attempted == 0:
+            continue
+
+        qid = int(row.get("question_unittest_id", 0)) if "question_unittest_id" in row.index else 0
+
+        difficulties[qname] = ItemDifficulty(
+            question_id=qid,
+            question_name=qname,
+            topic=str(row.get("topic", "")),
+            train_pass_rate=students_passed / students_attempted,
+            avg_attempts_to_pass=(
+                np.mean(total_attempts_to_pass) if total_attempts_to_pass else float("nan")
+            ),
+            fraction_eventually_pass=students_passed / students_attempted,
+            n_train_students_attempted=students_attempted,
+        )
+
+    return difficulties
+
+
+# ── Student-split data loading ───────────────────────────────────────────────
+
+
+def load_student_split_eval_items(
+    data: UnifiedData,
+    split: StudentSplit,
+    n_examples: int = 5,
+    seed: int = 42,
+) -> Tuple[List[EvalItem], Dict[str, ItemDifficulty]]:
+    """Convert StudentSplit data into EvalItems for the LLM predictor.
+
+    Uses the same (data, split) that psychometric models use.
+
+    Returns:
+        Tuple of (eval_items, item_difficulties).
+    """
+    hf_qi = _load_hf_question_details()
+    qi = data.question_infos
+
+    # Filter HF questions to this course
+    course_infos = pd.read_csv(
+        f"{snapshot_download(repo_id=HF_REPO_ID, repo_type='dataset', local_files_only=True)}/course_infos.csv"
+    )
+    course_row = course_infos[course_infos["course_name"] == data.course_name]
+    if len(course_row) > 0:
+        course_id = course_row["course_id"].values[0]
+        hf_qi = hf_qi[hf_qi["course_id"] == course_id]
+
+    # Map qname -> full question details from HuggingFace
+    hf_lookup = {}
+    qname_to_qid = {}
+    for _, row in hf_qi.iterrows():
+        hf_lookup[row["question_name"]] = row
+        qname_to_qid[row["question_name"]] = int(row["question_id"])
+
+    # Identify unique target questions (weeks 4+) from test items
+    test_item_set = set(split.test_item_indices.tolist())
+    target_qnames = qi[qi.index.isin(test_item_set)]["qname"].unique()
+
+    logger.info("Target questions: %d", len(target_qnames))
+
+    # Map test student indices to student_ids
+    test_student_ids = [data.student_ids[i] for i in split.test_student_indices]
+
+    # Build train question IDs (weeks 1-3) for context filtering
+    train_qnames = qi.iloc[split.train_item_indices]["qname"].unique()
+    train_qids = set()
+    for qn in train_qnames:
+        qid = qname_to_qid.get(qn)
+        if qid is not None:
+            train_qids.add(qid)
+
+    # Build qid -> qname lookup from HF data
+    qid_to_qname = {int(row["question_id"]): row["question_name"] for _, row in hf_qi.iterrows()}
+
+    test_sid_set = set(str(sid) for sid in test_student_ids)
+    main_df = data.main_data.copy()
+    main_df["student_id"] = main_df["student_id"].astype(str)
+
+    # Context submissions: test students' weeks 1-3 data
+    context_df = main_df[
+        main_df["student_id"].isin(test_sid_set)
+        & main_df["question_unittest_id"].isin(train_qids)
+    ].sort_values(["student_id", "timestamp"])
+
+    # Pre-group context by student
+    student_context = {}
+    for sid, group in context_df.groupby("student_id"):
+        student_context[str(sid)] = group.to_dict("records")
+
+    # Build EvalItems
+    items = []
+    for test_s_idx, sid in zip(split.test_student_indices, test_student_ids):
+        sid_str = str(sid)
+
+        for qname in target_qnames:
+            # Check student has real observations on this question's items
+            q_item_indices = qi[qi["qname"] == qname].index.tolist()
+            q_test_items = [i for i in q_item_indices if i in test_item_set]
+            if not q_test_items:
                 continue
 
-            # Get N most recent prior questions by their latest timestamp
-            sorted_priors = sorted(
-                prior_latest.items(), key=lambda x: x[1]
-            )[-n_examples:]
-            prior_qid_set = {qid for qid, _ in sorted_priors}
+            has_obs = False
+            for item_idx in q_test_items:
+                obs = data.correctness_matrix[test_s_idx, item_idx, :]
+                if (obs != -1).any():
+                    has_obs = True
+                    break
+            if not has_obs:
+                continue
 
-            # Build examples: all attempts on each prior question before target
+            # Look up full question details
+            hf_row = hf_lookup.get(qname)
+            if hf_row is None:
+                continue
+
+            qid = str(int(hf_row["question_id"]))
+            q_text = str(hf_row.get("question_text", ""))
+            q_template = str(hf_row.get("question_template", ""))
+            q_unittests = str(hf_row.get("question_unittests", ""))
+
+            if not q_unittests or q_unittests == "nan":
+                continue
+
+            # Build examples from this student's weeks 1-3 history
             examples = []
-            for pq, _ in sorted_priors:
-                for r in q_rows.get(pq, []):
-                    if r["timestamp"] < target_time:
-                        examples.append(Example(
-                            question_name=r["question_name"],
-                            question_text=r["question_text"],
-                            question_template=r["question_template"],
-                            response=r["response"],
-                            response_type=r.get("response_type", "Submit"),
-                            pass_pattern=str(r.get("pass", "")),
-                        ))
+            rows = student_context.get(sid_str, [])
 
-            if not examples:
-                continue
+            # Get unique prior questions, sorted by timestamp (most recent last)
+            prior_qs = {}
+            for r in rows:
+                pqid = r["question_unittest_id"]
+                if str(pqid) != qid:
+                    prior_qs.setdefault(pqid, []).append(r)
 
-            items.append(EvalItem(
-                question_id=str(target_qid),
-                student_id=str(student_id),
-                question_name=target["question_name"],
-                question_text=target["question_text"],
-                question_template=target["question_template"],
-                question_unittests=str(
-                    target.get("question_unittests", "")
-                ),
+            # Take n_examples most recent prior questions
+            sorted_pqs = sorted(
+                prior_qs.items(),
+                key=lambda x: x[1][-1]["timestamp"],
+            )[-n_examples:]
+
+            for pqid, pq_rows in sorted_pqs:
+                pq_name = qid_to_qname.get(int(pqid), "")
+                pq_hf = hf_lookup.get(pq_name)
+                pq_text = str(pq_hf["question_text"]) if pq_hf is not None else ""
+                pq_template = str(pq_hf["question_template"]) if pq_hf is not None else ""
+
+                for r in pq_rows:
+                    if not r.get("response"):
+                        continue
+                    examples.append(Example(
+                        question_name=pq_name,
+                        question_text=pq_text,
+                        question_template=pq_template,
+                        response=str(r["response"]),
+                        response_type=str(r.get("response_type", "Submit")),
+                        pass_pattern=str(r.get("pass", "")),
+                    ))
+
+            # Collect this student's real submissions on the target question
+            target_rows = main_df[
+                (main_df["student_id"] == sid_str)
+                & (main_df["question_unittest_id"] == int(qid))
+            ].sort_values("timestamp")
+
+            real_attempts = []
+            for _, r in target_rows.iterrows():
+                if not r.get("response"):
+                    continue
+                real_attempts.append({
+                    "response": str(r["response"]),
+                    "pass": str(r.get("pass", "")),
+                    "response_type": str(r.get("response_type", "Submit")),
+                })
+
+            item = EvalItem(
+                question_id=qid,
+                student_id=sid_str,
+                question_name=qname,
+                question_text=q_text,
+                question_template=q_template,
+                question_unittests=q_unittests,
                 examples=examples,
-            ))
+            )
+            item._real_attempts = real_attempts
+            items.append(item)
 
-        n_processed += 1
-        if n_processed % 500 == 0:
-            logger.info("  Processed %d/%d students (%d items so far)…",
-                        n_processed, len(sampled_students), len(items))
-
-    # Shuffle so partial runs give representative coverage across students
-    import random
-    rng = random.Random(seed)
+    # Shuffle for representative coverage in partial runs
+    rng = np.random.RandomState(seed)
     rng.shuffle(items)
 
-    logger.info("Built %d trajectory items (shuffled)", len(items))
-    return items
+    logger.info("Built %d eval items for %d test students", len(items), len(test_student_ids))
+
+    # Compute item difficulty from train students
+    difficulties = _compute_item_difficulty(data, split)
+
+    return items, difficulties

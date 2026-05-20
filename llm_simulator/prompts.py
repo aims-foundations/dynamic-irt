@@ -7,7 +7,7 @@ One scenario ("imitate this student"), parameterized by:
 """
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 # ── Code extraction ──────────────────────────────────────────────────────────
 
@@ -83,8 +83,9 @@ def extract_action(llm_output: str) -> str:
 # ── Shared instruction block ────────────────────────────────────────────────
 
 _CODE_INSTRUCTIONS = (
-    "You must first choose an action — either [Precheck] (run public tests only, "
-    "no grade penalty) or [Submit] (final submission, graded against all tests).\n\n"
+    "Choose an action based on how this student would behave:\n"
+    "- [Submit] if the student would confidently submit directly.\n"
+    "- [Precheck] if the student would test against public tests first.\n\n"
     "Then provide your C++ implementation that will replace the "
     "{{ STUDENT_ANSWER }} block in the template.\n"
     "- Do NOT reproduce any part of the template.\n"
@@ -106,101 +107,139 @@ def build_prompt(
     question_name: str,
     question_text: str,
     question_template: str,
-    examples: Optional[List[Dict[str, str]]] = None,
     feedback: Optional[Dict] = None,
-) -> str:
-    """Build a unified prompt for LLM student simulation.
+    persona_text: Optional[str] = None,
+    self_summaries: Optional[List[str]] = None,
+    question_metadata: Optional[str] = None,
+    question_summary: Optional[str] = None,
+    feedback_summary: Optional[str] = None,
+) -> Union[str, Tuple[str, str]]:
+    """Build a prompt for LLM student simulation.
 
-    Parameters
-    ----------
-    question_name : str
-        Name/title of the target question.
-    question_text : str
-        Full problem description.
-    question_template : str
-        C++ template with {{ STUDENT_ANSWER }} placeholder.
-    examples : list of dict, optional
-        In-context examples of the student's code. Each dict has keys:
-        ``question_name``, ``question_text``, ``question_template``, ``response``.
-        If None or empty, produces a zero-shot prompt.
-    feedback : dict, optional
-        Retry feedback from a previous attempt. Keys:
-        ``previous_code`` (str), ``failed_tests`` (list of dict with keys
-        ``input``, ``std_in``, ``expected``, ``actual``).
-
-    Returns
-    -------
-    str
-        The assembled prompt string.
+    Returns (system_message, user_message) when persona_text + summaries
+    are provided. Falls back to a plain prompt string otherwise.
     """
-    parts: List[str] = []
+    # ── Student split mode: structured system + user messages ──
+    if persona_text and self_summaries:
 
-    # ── In-context examples (few-shot / trajectory) ──
-    if examples:
-        parts.append("=== Student Submission History ===\n")
-        parts.append(
-            "Below are this student's previous submissions on other problems, "
-            "showing how they code, iterate, and choose between Precheck and Submit.\n"
-            "- [Precheck] runs public tests only (no grade penalty).\n"
-            "- [Submit] is a final submission graded against all tests.\n"
+        # == SYSTEM MESSAGE ==
+        sys_parts = [
+            # Task framing
+            "You are predicting what a specific university student would submit "
+            "for a C++ programming assignment. Your goal is to mimic the full "
+            "submission history of this student. If you believe the student "
+            "would not pass on the first attempt, produce code with errors "
+            "consistent with their coding abilities and profile. Continue "
+            "producing realistic attempts until you believe the student would "
+            "solve the question. Study the student profile and prior work "
+            "to calibrate your response.",
+
+            # Question description (short — full text + template are in user message)
+            f"\n=== QUESTION: {question_name} ===\n",
+        ]
+        if question_summary:
+            sys_parts.append(question_summary)
+        if question_metadata:
+            sys_parts.append(question_metadata)
+
+        # Student identity (strip the old intro line from persona)
+        persona_lines = persona_text.split("\n")
+        identity_start = next(
+            (i for i, l in enumerate(persona_lines) if "STUDENT IDENTITY" in l), None
         )
+        if identity_start is not None:
+            sys_parts.append("\n" + "\n".join(persona_lines[identity_start:]))
+        else:
+            sys_parts.append("\n" + persona_text)
 
-        # Group consecutive examples by question_name
-        from itertools import groupby
-        q_num = 0
-        for qname, group in groupby(examples, key=lambda x: x["question_name"]):
-            group = list(group)
-            q_num += 1
+        system_message = "\n".join(sys_parts)
+
+        # == USER MESSAGE ==
+        parts: List[str] = []
+
+        # Self approaches (with question name + summary)
+        if self_summaries:
             parts.append(
-                f"--- Problem {q_num}: {qname} ---\n"
-                f"{group[0]['question_text']}\n\n"
-                f"Template:\n{group[0]['question_template']}\n"
+                "=== How This Student Approached Similar Problems ===\n"
             )
-            for a, ex in enumerate(group, start=1):
-                rtype = ex.get("response_type", "Submit")
-                action = "Precheck" if rtype == "Prechecked" else "Submit"
-                result = ex.get("pass_pattern", "")
-                result_str = f" → Result: {result}" if result else ""
-                parts.append(
-                    f"Attempt {a} [{action}]{result_str}:\n{ex['response']}\n"
-                )
+            for i, summary in enumerate(self_summaries, 1):
+                parts.append(f"{i}. {summary}\n")
 
+        # Format demonstration
         parts.append(
-            "Now, using the same student's coding style, approach, and "
-            "Precheck/Submit strategy, attempt this new problem:\n"
+            "=== Submission Format ===\n"
+            "You can either [Precheck] (run public tests only, no grade penalty) "
+            "or [Submit] (final submission, graded against all tests).\n"
+            "Example:\n"
+            "[Precheck]\n"
+            "```cpp\n"
+            "// your implementation here\n"
+            "```\n"
         )
 
-    # ── Target question ──
+        # Question text + template
+        parts.append(f"=== Question ===\n{question_text}\n")
+        parts.append(f"=== Code Template ===\n{question_template}\n")
+
+        # Feedback (accumulated history if available, otherwise single)
+        if feedback_summary and feedback:
+            parts.append(
+                f"\n=== Previous Attempt ===\n"
+                f"```cpp\n{feedback['previous_code']}\n```\n\n"
+                f"Feedback: {feedback_summary}\n\n"
+                "Edit your previous code to fix these issues. "
+                "Make the smallest change necessary — fix only the buggy "
+                "lines and keep everything else identical.\n"
+            )
+        elif feedback:
+            parts.append(
+                f"\n=== Previous Attempt ===\n"
+                f"```cpp\n{feedback['previous_code']}\n```\n\n"
+                f"=== Feedback from Visible Tests ===\n"
+                "Your previous submission failed the following visible test cases:\n"
+            )
+            for i, ft in enumerate(feedback["failed_tests"], start=1):
+                actual = ft["actual"] or "(no output — likely a compile or runtime error)"
+                parts.append(
+                    f"Test {i}:\n"
+                    f"  Test input:  {ft['input']}\n"
+                    f"  STD input:   {ft['std_in']}\n"
+                    f"  Expected:    {ft['expected']}\n"
+                    f"  Got:         {actual}\n"
+                )
+            parts.append(
+                "\nEdit your previous code to fix the failing tests. "
+                "Make the smallest change necessary — fix only the buggy "
+                "lines and keep everything else identical. "
+                "Do NOT rewrite the solution from scratch.\n"
+            )
+
+        # Instructions at the very end
+        parts.append(f"\n{_CODE_INSTRUCTIONS}")
+        return (system_message, "\n".join(parts))
+
+    # No student split summaries and no persona — plain prompt
+    parts: List[str] = []
     parts.append(
         f"Question: {question_name} — {question_text}\n\n"
         f"Template:\n{question_template}\n"
     )
-
-    # ── Previous attempt feedback (iterative retry) ──
     if feedback:
         parts.append(
             f"\n=== Previous Attempt ===\n"
             f"```cpp\n{feedback['previous_code']}\n```\n\n"
-            f"=== Feedback from Visible Tests ===\n"
-            "Your previous submission failed the following visible test cases:\n"
         )
-        for i, ft in enumerate(feedback["failed_tests"], start=1):
-            actual = ft["actual"] or "(no output — likely a compile or runtime error)"
-            parts.append(
-                f"Test {i}:\n"
-                f"  Test input:  {ft['input']}\n"
-                f"  STD input:   {ft['std_in']}\n"
-                f"  Expected:    {ft['expected']}\n"
-                f"  Got:         {actual}\n"
-            )
-        parts.append(
-            "\nEdit your previous code to fix the failing tests. "
-            "Make the smallest change necessary — fix only the buggy "
-            "lines and keep everything else identical. "
-            "Do NOT rewrite the solution from scratch.\n"
-        )
-
-    # ── Instructions ──
+        if feedback_summary:
+            parts.append(f"Feedback: {feedback_summary}\n")
+        else:
+            parts.append("=== Feedback from Visible Tests ===\n")
+            for i, ft in enumerate(feedback["failed_tests"], start=1):
+                actual = ft["actual"] or "(no output)"
+                parts.append(
+                    f"Test {i}:\n"
+                    f"  Test input:  {ft['input']}\n"
+                    f"  Expected:    {ft['expected']}\n"
+                    f"  Got:         {actual}\n"
+                )
     parts.append(f"\n{_CODE_INSTRUCTIONS}")
-
     return "\n".join(parts)
