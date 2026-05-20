@@ -179,37 +179,15 @@ def load_student_split_data(
 
     Returns a single (data, split) pair shared by all adapters.
     """
-    from .data_filter import DataFilterConfig, apply_filter
-    from .harness import _apply_index_filter
-    from .student_split import StudentSplit, generate_student_split
+    from .data_filter import DataFilterConfig, filter_data
+    from .student_split import generate_student_split
 
     data = load_unified_data(course_name)
 
-    # Quality filter across all weeks
     max_week = int(data.question_infos["week"].max())
     config = DataFilterConfig(max_week=max_week, max_attempts=max_attempts)
-    student_idx, item_idx, _ = apply_filter(
-        data.correctness_matrix, data.question_infos, config
-    )
-    data = _apply_index_filter(data, student_idx, item_idx)
+    data = filter_data(data, config)
 
-    # Cap attempts
-    if data.n_max_attempts > max_attempts:
-        data = UnifiedData(
-            main_data=data.main_data,
-            correctness_matrix=data.correctness_matrix[:, :, :max_attempts],
-            time_matrix=data.time_matrix[:, :, :max_attempts],
-            question_infos=data.question_infos,
-            item_week=data.item_week,
-            qid_to_week=data.qid_to_week,
-            student_ids=data.student_ids,
-            n_students=data.n_students,
-            n_items=data.n_items,
-            n_max_attempts=max_attempts,
-            course_name=data.course_name,
-        )
-
-    # Student split
     split = generate_student_split(
         n_students=data.n_students,
         item_week=data.item_week,

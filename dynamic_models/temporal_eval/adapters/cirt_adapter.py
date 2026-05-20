@@ -1,17 +1,43 @@
-"""CIRT model adapter for temporal evaluation.
+"""CIRT model adapter.
 
-Trains parametric IRT model (sigmoid learning curves) on train-week items,
-predicts test-week items with frozen student params and default difficulty.
+    P(correct) = sigmoid(theta[s] - z[q] - lambda[q] * t)
+
+Two parameters per item:
+  - z[q]: baseline difficulty
+  - lambda[q]: temporal difficulty slope (positive = harder over attempts)
+One parameter per student:
+  - theta[s]: ability
 """
 
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 
 from ..base_adapter import ModelAdapter, PredictionResult
 from ..data_loader import UnifiedData
 from ..temporal_split import TemporalSplit
+
+
+def _get_device():
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _extract_valid_obs(corr_3d):
+    S, Q, T = corr_3d.shape
+    y_flat = corr_3d.reshape(-1)
+    valid_mask = (y_flat != -1).numpy()
+    valid_indices = np.where(valid_mask)[0]
+    student_idx = valid_indices // (Q * T)
+    question_idx = (valid_indices // T) % Q
+    attempt_idx = valid_indices % T
+    y_obs = y_flat[valid_mask].float()
+    return y_obs, student_idx, question_idx, attempt_idx
 
 
 class CIRTAdapter(ModelAdapter):
@@ -21,146 +47,184 @@ class CIRTAdapter(ModelAdapter):
         return "CIRT"
 
     def fit_and_predict(
-        self,
-        data: UnifiedData,
-        split: TemporalSplit,
-        seed: int = 42,
-        epochs: int = 3000,
-        lr: float = 0.01,
-        concentration: float = 10.0,
-        eps: float = 1e-2,
-        **kwargs,
+        self, data, split, seed=42, epochs=3000, lr=0.01, eps=1e-2, **kwargs,
     ) -> PredictionResult:
         torch.manual_seed(seed)
         np.random.seed(seed)
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
+        device = _get_device()
 
         N = data.n_students
         T = data.n_max_attempts
 
-        # ---- Extract train observations ----
         train_corr = data.correctness_matrix[:, split.train_item_indices, :]
         Q_train = split.n_train_items
 
-        # Flatten and get valid indices
-        y_flat = train_corr.reshape(-1)
-        valid_mask = (y_flat != -1).numpy()
-        valid_indices = np.where(valid_mask)[0]
-
+        y_obs, s_idx_np, q_idx_np, t_idx_np = _extract_valid_obs(train_corr)
         t_vals = np.linspace(1, T, T, dtype=np.float32)
-        student_idx_np = valid_indices // (Q_train * T)
-        # question_idx is local to train items (0..Q_train-1)
-        question_idx_np = (valid_indices // T) % Q_train
-        t_idx_np = valid_indices % T
         t_flat_np = t_vals[t_idx_np]
+        y_obs = y_obs * (1 - 2 * eps) + eps
 
-        y_obs = y_flat[valid_mask].float()
-        y_obs = y_obs * (1 - 2 * eps) + eps  # smooth away from 0/1
+        y_obs_d = y_obs.to(device)
+        t_d = torch.from_numpy(t_flat_np).to(device).float()
+        s_d = torch.from_numpy(s_idx_np).to(device).long()
+        q_d = torch.from_numpy(q_idx_np).to(device).long()
 
-        y_obs = y_obs.to(device)
-        t_flat = torch.from_numpy(t_flat_np).to(device).float()
-        student_idx = torch.from_numpy(student_idx_np).to(device).long()
-        question_idx = torch.from_numpy(question_idx_np).to(device).long()
-
-        # ---- Initialize and train ----
-        theta0 = nn.Parameter(torch.abs(torch.randn(N, device=device)))
-        theta1 = nn.Parameter(torch.sigmoid(torch.randn(N, device=device)))
+        theta = nn.Parameter(torch.randn(N, device=device))
         z_train = nn.Parameter(torch.abs(torch.randn(Q_train, device=device)))
+        lam_train = nn.Parameter(torch.zeros(Q_train, device=device))
+        optimizer = optim.Adam([theta, z_train, lam_train], lr=lr)
 
-        optimizer = optim.Adam([theta0, theta1, z_train], lr=lr)
+        print(f"    [CIRT] {N} students, {Q_train} train items, "
+              f"{len(y_obs)} observations, device={device}", flush=True)
 
         train_losses = []
         for epoch in range(epochs):
             optimizer.zero_grad()
-
-            mean_correct = theta1[student_idx] * torch.sigmoid(
-                theta0[student_idx] * t_flat - z_train[question_idx]
-            )
-            mean_correct = mean_correct.clamp(1e-6, 1 - 1e-6)
-
-            alpha = mean_correct * concentration
-            beta = (1 - mean_correct) * concentration
-            term1 = (
-                torch.lgamma(alpha + beta)
-                - torch.lgamma(alpha)
-                - torch.lgamma(beta)
-            )
-            term2 = (alpha - 1) * torch.log(y_obs) + (beta - 1) * torch.log(
-                1 - y_obs
-            )
-            nll = -(term1 + term2).mean()
-
-            # Regularize theta1 to [0, 1]
-            cost = (
-                theta1**2 * ((theta1 < 0).float() + (theta1 > 1).float())
-            ).mean()
-            loss = nll + cost
+            logit = theta[s_d] - z_train[q_d] - lam_train[q_d] * t_d
+            pred = torch.sigmoid(logit)
+            loss = F.binary_cross_entropy(pred, y_obs_d)
             loss.backward()
             optimizer.step()
             train_losses.append(loss.item())
+            if (epoch + 1) % 500 == 0 or epoch == 0:
+                print(f"    [CIRT] epoch {epoch+1}/{epochs} "
+                      f"loss={loss.item():.4f}", flush=True)
 
-        # ---- Extract learned parameters ----
-        theta0_np = theta0.detach().cpu().numpy()
-        theta1_np = torch.sigmoid(theta1).detach().cpu().numpy()
+        theta_np = theta.detach().cpu().numpy()
         z_np = z_train.detach().cpu().numpy()
+        lam_np = lam_train.detach().cpu().numpy()
 
-        # ---- Predict on test items ----
         test_corr = data.correctness_matrix[:, split.test_item_indices, :]
-        Q_test = split.n_test_items
-
-        y_test_flat = test_corr.reshape(-1)
-        test_valid_mask = (y_test_flat != -1).numpy()
-        test_valid_indices = np.where(test_valid_mask)[0]
-
-        test_student_idx = test_valid_indices // (Q_test * T)
-        test_local_q_idx = (test_valid_indices // T) % Q_test
-        test_item_idx = split.test_item_indices[test_local_q_idx].numpy()
-        test_t_idx = test_valid_indices % T
-        test_t_flat = t_vals[test_t_idx]
-
-        y_true = y_test_flat[test_valid_mask].numpy()
+        y_obs_test, test_s_idx, test_q_idx, test_a_idx = _extract_valid_obs(test_corr)
+        test_item_idx = split.test_item_indices[test_q_idx].numpy()
+        test_t_flat = t_vals[test_a_idx]
+        y_true = y_obs_test.numpy()
 
         with torch.no_grad():
-            s_idx = torch.from_numpy(test_student_idx).to(device).long()
+            s_idx = torch.from_numpy(test_s_idx).to(device).long()
             t_test = torch.from_numpy(test_t_flat).to(device).float()
-
-            # Test difficulty = 0 (prior mean)
-            z_test = torch.zeros(1, device=device)
-
-            mean_pred = theta1[s_idx] * torch.sigmoid(
-                theta0[s_idx] * t_test - z_test
-            )
-            y_pred_prob = mean_pred.clamp(1e-6, 1 - 1e-6).cpu().numpy()
-
-        if len(y_true) == 0:
-            raise ValueError(
-                f"No test observations for cutoff_week={split.cutoff_week}"
-            )
+            # Test items unseen — use z=0, lambda=0 (prior mean)
+            y_pred_prob = torch.sigmoid(theta[s_idx]).clamp(1e-6, 1-1e-6).cpu().numpy()
 
         return PredictionResult(
-            y_true=y_true,
-            y_pred_prob=y_pred_prob,
-            student_indices=test_student_idx,
-            item_indices=test_item_idx,
+            y_true=y_true, y_pred_prob=y_pred_prob,
+            student_indices=test_s_idx, item_indices=test_item_idx,
             losses={"train": train_losses},
-            student_params={
-                "theta_0 (learning rate)": theta0_np,
-                "theta_1 (asymptotic ability)": theta1_np,
-            },
-            item_params={
-                "z (difficulty)": z_np,
-            },
+            student_params={"theta (ability)": theta_np},
+            item_params={"z (difficulty)": z_np, "lambda (temporal slope)": lam_np},
+            model_state={"theta": theta.detach().cpu(), "z_train": z_train.detach().cpu(),
+                         "lam_train": lam_train.detach().cpu()},
+        )
+
+    def fit_and_predict_student_split(
+        self, data, split, seed=42, epochs=3000, calib_epochs=1000,
+        lr=0.01, eps=1e-2, **kwargs,
+    ):
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        device = _get_device()
+
+        T = data.n_max_attempts
+        N_train = len(split.train_student_indices)
+        N_test = len(split.test_student_indices)
+        Q = data.n_items
+        t_vals = np.linspace(1, T, T, dtype=np.float32)
+
+        # ---- Training (train students, all items) ----
+        train_corr = data.correctness_matrix[split.train_student_indices, :, :]
+        y_obs, s_idx_np, q_idx_np, t_idx_np = _extract_valid_obs(train_corr)
+        t_flat_np = t_vals[t_idx_np]
+        y_obs = y_obs * (1 - 2 * eps) + eps
+
+        y_d = y_obs.to(device)
+        s_d = torch.from_numpy(s_idx_np).to(device).long()
+        q_d = torch.from_numpy(q_idx_np).to(device).long()
+        t_d = torch.from_numpy(t_flat_np).to(device).float()
+
+        theta_train = nn.Parameter(torch.randn(N_train, device=device))
+        z = nn.Parameter(torch.abs(torch.randn(Q, device=device)))
+        lam = nn.Parameter(torch.zeros(Q, device=device))
+        optimizer = optim.Adam([theta_train, z, lam], lr=lr)
+
+        print(f"    [CIRT] Training: {N_train} students, {Q} items, "
+              f"{len(y_obs)} obs", flush=True)
+
+        train_losses = []
+        for epoch in range(epochs):
+            optimizer.zero_grad()
+            logit = theta_train[s_d] - z[q_d] - lam[q_d] * t_d
+            pred = torch.sigmoid(logit)
+            loss = F.binary_cross_entropy(pred, y_d)
+            loss.backward()
+            optimizer.step()
+            train_losses.append(loss.item())
+            if (epoch + 1) % 500 == 0 or epoch == 0:
+                print(f"    [CIRT] train {epoch+1}/{epochs} "
+                      f"loss={loss.item():.4f}", flush=True)
+
+        z_np = z.detach().cpu().numpy()
+        lam_np = lam.detach().cpu().numpy()
+        z.requires_grad_(False)
+        lam.requires_grad_(False)
+
+        # ---- Calibration (test students, weeks 1-W items) ----
+        calib_corr = data.correctness_matrix[split.test_student_indices][:, split.train_item_indices, :]
+        y_calib, s_idx_np, q_idx_np, t_idx_np = _extract_valid_obs(calib_corr)
+        t_flat_np = t_vals[t_idx_np]
+        y_calib = y_calib * (1 - 2 * eps) + eps
+
+        z_calib = z[split.train_item_indices]
+        lam_calib = lam[split.train_item_indices]
+
+        y_d = y_calib.to(device)
+        s_d = torch.from_numpy(s_idx_np).to(device).long()
+        q_d = torch.from_numpy(q_idx_np).to(device).long()
+        t_d = torch.from_numpy(t_flat_np).to(device).float()
+
+        theta_test = nn.Parameter(torch.zeros(N_test, device=device))
+        optimizer = optim.Adam([theta_test], lr=lr)
+
+        print(f"    [CIRT] Calibration: {N_test} students, {len(y_calib)} obs", flush=True)
+
+        for epoch in range(calib_epochs):
+            optimizer.zero_grad()
+            logit = theta_test[s_d] - z_calib[q_d] - lam_calib[q_d] * t_d
+            pred = torch.sigmoid(logit)
+            loss = F.binary_cross_entropy(pred, y_d)
+            loss.backward()
+            optimizer.step()
+            if (epoch + 1) % 200 == 0 or epoch == 0:
+                print(f"    [CIRT] calib {epoch+1}/{calib_epochs} "
+                      f"loss={loss.item():.4f}", flush=True)
+
+        # ---- Predict (test students, weeks W+1+ items) ----
+        pred_corr = data.correctness_matrix[split.test_student_indices][:, split.test_item_indices, :]
+        y_obs_pred, s_idx_np, q_idx_np, a_idx_np = _extract_valid_obs(pred_corr)
+        y_true = y_obs_pred.numpy()
+        test_item_idx = split.test_item_indices[q_idx_np]
+        t_flat_np = t_vals[a_idx_np]
+
+        with torch.no_grad():
+            s_d = torch.from_numpy(s_idx_np).to(device).long()
+            q_d = torch.from_numpy(q_idx_np).to(device).long()
+            t_d = torch.from_numpy(t_flat_np).to(device).float()
+            z_pred = z[split.test_item_indices]
+            lam_pred = lam[split.test_item_indices]
+            logit = theta_test[s_d] - z_pred[q_d] - lam_pred[q_d] * t_d
+            y_pred_prob = torch.sigmoid(logit).clamp(1e-6, 1-1e-6).cpu().numpy()
+
+        print(f"    [CIRT] Predict: {len(y_true)} test obs", flush=True)
+
+        return PredictionResult(
+            y_true=y_true, y_pred_prob=y_pred_prob,
+            student_indices=s_idx_np, item_indices=test_item_idx, attempt_indices=a_idx_np,
+            losses={"train": train_losses},
+            student_params={"theta (ability)": theta_test.detach().cpu().numpy()},
+            item_params={"z (difficulty)": z_np, "lambda (temporal slope)": lam_np},
             model_state={
-                "theta0": theta0.detach().cpu(),
-                "theta1": theta1.detach().cpu(),
-                "z_train": z_train.detach().cpu(),
-                "concentration": concentration,
-                "epochs": epochs,
+                "theta_test": theta_test.detach().cpu(),
+                "z": z.detach().cpu(),
+                "lam": lam.detach().cpu(),
             },
         )
 

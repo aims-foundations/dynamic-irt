@@ -186,12 +186,14 @@ class IRTAdapter(ModelAdapter):
         print(f"    [IRT] Training: {N_train} students, {Q} items, "
               f"{len(y_obs)} obs, device={device}", flush=True)
 
+        train_losses = []
         for epoch in range(epochs):
             optimizer.zero_grad()
             pred = torch.sigmoid(theta_train[s_idx_d] - b[q_idx_d])
             loss = F.binary_cross_entropy(pred, y_obs_d)
             loss.backward()
             optimizer.step()
+            train_losses.append(loss.item())
             if (epoch + 1) % 500 == 0 or epoch == 0:
                 print(f"    [IRT] train epoch {epoch+1}/{epochs} "
                       f"loss={loss.item():.4f}", flush=True)
@@ -250,6 +252,7 @@ class IRTAdapter(ModelAdapter):
             student_indices=s_idx_np,
             item_indices=test_item_idx,
             attempt_indices=attempt_idx,
+            losses={"train": train_losses},
             student_params={"theta (ability)": theta_test_np},
             item_params={"b (difficulty)": b_np},
             model_state={
