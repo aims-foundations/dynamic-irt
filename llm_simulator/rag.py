@@ -104,67 +104,6 @@ class RAGRetriever:
             len(self._question_subs), len(self._student_subs), len(self._q_ids),
         )
 
-    def _try_load_embeddings(self):
-        if self._embeddings_loaded:
-            return
-        self._embeddings_loaded = True
-        try:
-            from datasets import load_dataset
-            logger.info("RAGRetriever: loading embeddings from HuggingFace...")
-            ds = load_dataset("CodeInsightTeam/code_insights_csv", split="embeddings")
-            self._embeddings = np.array(ds["embedding"], dtype=np.float32)
-            logger.info("RAGRetriever: loaded %d embeddings.", len(self._embeddings))
-        except Exception as e:
-            logger.warning("RAGRetriever: could not load embeddings (%s). Using pass-rate fallback.", e)
-            self._embeddings = None
-
-    def retrieve_examples(
-        self,
-        student_id: str,
-        question_id: str,
-        target_timestamp: Optional[str] = None,
-        max_self: int = 3,
-    ) -> List[dict]:
-        """Retrieve prior submissions as structured example dicts.
-
-        Only retrieves from weeks strictly before the target question's week,
-        matching the temporal split used by other models (RSSM, etc.).
-
-        Returns list of dicts with keys: question_name, question_text,
-        question_template, response, response_type, pass_pattern.
-        Same format as what the summarizer expects.
-        """
-        student_id = str(student_id)
-        question_id = str(int(float(question_id)) if "." in str(question_id) else question_id)
-
-        cutoff = None
-        if target_timestamp:
-            cutoff = pd.to_datetime(target_timestamp, format="%d/%m/%y, %H:%M:%S", errors="coerce")
-
-        target_week = self._q_id_to_week.get(question_id)
-
-        return self._retrieve_self_examples(student_id, question_id, max_self, cutoff, target_week)
-
-    def retrieve_context(
-        self,
-        student_id: str,
-        question_id: str,
-        student_pass_rate: float,
-        target_timestamp: Optional[str] = None,
-        max_self: int = 3,
-    ) -> Optional[str]:
-        student_id = str(student_id)
-        question_id = str(int(float(question_id)) if "." in str(question_id) else question_id)
-
-        cutoff = None
-        if target_timestamp:
-            cutoff = pd.to_datetime(target_timestamp, format="%d/%m/%y, %H:%M:%S", errors="coerce")
-
-        self_block = self._retrieve_self_similar(student_id, question_id, max_self, cutoff)
-        if not self_block:
-            return None
-        return "=== Your Prior Work on Similar Problems ===\n\n" + self_block
-
     def _retrieve_self_examples(
         self, student_id: str, question_id: str, max_self: int,
         cutoff=None, target_week=None,
@@ -243,65 +182,6 @@ class RAGRetriever:
                 })
 
         return examples
-
-    def _retrieve_self_similar(
-        self, student_id: str, question_id: str, max_self: int,
-        cutoff=None,
-    ) -> Optional[str]:
-        s_df = self._student_subs.get(student_id)
-        if s_df is None or len(s_df) == 0:
-            return None
-
-        other_qs = s_df[s_df["question_unittest_id"].astype(str) != question_id]
-        if cutoff is not None:
-            other_qs = other_qs[other_qs["timestamp_dt"] < cutoff]
-        if other_qs.empty:
-            return None
-
-        last_per_q = other_qs.sort_values("timestamp").groupby("question_unittest_id").last()
-        if last_per_q.empty:
-            return None
-
-        # Score each prior question: similarity to target + recency bias
-        target_idx = self._q_id_to_idx.get(question_id)
-        scores = []
-        max_ts = last_per_q["timestamp_dt"].max()
-        decay_halflife = 28 * 24 * 3600  # 4 weeks in seconds
-
-        for qid, row in last_per_q.iterrows():
-            qid_str = str(int(qid) if isinstance(qid, float) else qid)
-            cand_idx = self._q_id_to_idx.get(qid_str)
-
-            # Similarity score (0-1)
-            if target_idx is not None and cand_idx is not None and self._sim_matrix is not None:
-                sim = float(self._sim_matrix[target_idx, cand_idx])
-            else:
-                sim = 0.0
-
-            # Recency score: exponential decay with 1-week half-life
-            ts = row.get("timestamp_dt")
-            if pd.notna(ts) and pd.notna(max_ts):
-                age_seconds = (max_ts - ts).total_seconds()
-                recency = np.exp(-0.693 * age_seconds / decay_halflife)  # 0.693 = ln(2)
-            else:
-                recency = 0.0
-
-            combined = (1 - self._recency_weight) * sim + self._recency_weight * recency
-            scores.append((qid, combined, row))
-
-        scores.sort(key=lambda x: x[1], reverse=True)
-        selected = scores[:max_self]
-
-        lines = ["Your own solutions to similar problems:"]
-        for qid, score, row in selected:
-            code = _truncate_code(str(row["response"]))
-            pp = str(row.get("pass", ""))
-            qid_str = str(int(qid) if isinstance(qid, float) else qid)
-            q_name = self._q_id_to_name.get(qid_str, qid_str)
-            lines.append(f"\n--- Your solution to \"{q_name}\" (result: {pp}) ---")
-            lines.append(code)
-
-        return "\n".join(lines)
 
     @classmethod
     def from_student_split(

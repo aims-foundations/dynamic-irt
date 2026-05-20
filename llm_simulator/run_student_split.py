@@ -57,15 +57,11 @@ def main():
     parser.add_argument("--output_dir", default="results/llm_student_eval")
     parser.add_argument("--batch_size", type=int, default=20)
     parser.add_argument("--chunk_size", type=int, default=50)
-    parser.add_argument("--early_stop_patience", type=int, default=5)
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--log_prompts", type=str, default=None,
                         help="Save all prompts and responses to this file")
     parser.add_argument("--no_persona", action="store_true")
     parser.add_argument("--no_summarize", action="store_true")
-    parser.add_argument("--grounded", action="store_true",
-                        help="Ground LLM to real student trajectory: run exactly as many "
-                             "attempts as the student, feed back summaries of real attempts")
     args = parser.parse_args()
 
     # 1. Load data (same as psychometric models)
@@ -294,11 +290,9 @@ def main():
                 output_dir=output_dir,
                 batch_size=args.batch_size,
                 chunk_size=args.chunk_size,
-                early_stop_patience=args.early_stop_patience,
                 persona_builder=persona_builder,
                 history_summarizer=summarizer,
                 prompt_log_file=args.log_prompts,
-                grounded=args.grounded,
             )
         except Exception as e:
             logger.error("Model %s failed: %s", model_key, e, exc_info=True)

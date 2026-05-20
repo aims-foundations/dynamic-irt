@@ -226,19 +226,17 @@ def run_evaluation(
     output_dir: Optional[str] = None,
     batch_size: int = 20,
     chunk_size: int = 50,
-    early_stop_patience: int = 5,
     persona_builder=None,
     history_summarizer=None,
     prompt_log_file=None,
     tensor_parallel_size: int = 1,
     port: Optional[int] = None,
-    grounded: bool = False,
 ) -> List[EvalResult]:
     """Run iterative LLM evaluation on a list of items.
 
-    For each item, builds a prompt, calls the LLM, grades the response,
-    and provides feedback via multi-turn conversation until the item is
-    done (passed, stalled, or max attempts reached).
+    Each item follows the student's real attempt trajectory (grounded mode):
+    the LLM sees the student's actual code submissions step-by-step and
+    predicts the next attempt, matching their coding style and approach.
     Items are processed in chunks with results saved after each chunk.
     """
     student_to_course = student_to_course or {}
@@ -271,10 +269,9 @@ def run_evaluation(
 
         chunk_results = _run_chunk(
             chunk, runner, model_key, label, max_attempts,
-            n_public_map, batch_size, early_stop_patience,
+            n_public_map, batch_size,
             student_to_course, student_to_section, question_to_is_exam,
             persona_builder, history_summarizer, prompt_log_file,
-            grounded=grounded,
         )
         all_results.extend(chunk_results)
 
@@ -292,10 +289,9 @@ def run_evaluation(
 
 def _run_chunk(
     chunk_items, runner, model_key, label, max_attempts,
-    n_public_map, batch_size, early_stop_patience,
+    n_public_map, batch_size,
     student_to_course, student_to_section, question_to_is_exam,
     persona_builder, history_summarizer, prompt_log_file,
-    grounded=False,
 ):
     """Run the iterative attempt loop on a chunk of items."""
     # Parse test cases
@@ -323,28 +319,22 @@ def _run_chunk(
     last_code = [None] * len(chunk_items)
     last_eval = {}
     last_tests = {}
-    last_pass_pattern = {}
-    stall_count = [0] * len(chunk_items)
     active = list(range(len(chunk_items)))
     conversations = {}  # idx -> {"system": str, "messages": [...]}
 
-    # In grounded mode, per-item max attempts = len(real_attempts)
-    if grounded:
-        from .summarize import RAG_SUMMARY_PROMPT
-        item_max_attempts = {}
-        for idx, item in enumerate(chunk_items):
-            real = getattr(item, "_real_attempts", None) or []
-            item_max_attempts[idx] = min(len(real), max_attempts)
+    from .summarize import RAG_SUMMARY_PROMPT
+    item_max_attempts = {}
+    for idx, item in enumerate(chunk_items):
+        real = getattr(item, "_real_attempts", None) or []
+        item_max_attempts[idx] = min(len(real), max_attempts)
 
     for attempt in range(max_attempts):
         if not active:
             break
 
-        # In grounded mode, filter out items that have exhausted real attempts
-        if grounded:
-            active = [idx for idx in active if attempt < item_max_attempts.get(idx, 0)]
-            if not active:
-                break
+        active = [idx for idx in active if attempt < item_max_attempts.get(idx, 0)]
+        if not active:
+            break
 
         # ── Build prompts ──
         prompts_for_log = []
@@ -376,46 +366,36 @@ def _run_chunk(
                 ev = last_eval.get(idx)
                 td = test_data[idx]
 
-                if grounded:
-                    # Grounded: show full student trajectory so far (attempts 0..t-1)
-                    real = getattr(item, "_real_attempts", [])
-                    parts = ["=== Student's Attempt Trajectory ===\n"]
+                # Show full student trajectory so far (attempts 0..t-1)
+                real = getattr(item, "_real_attempts", [])
+                parts = ["=== Student's Attempt Trajectory ===\n"]
 
-                    for prev_t in range(attempt):
-                        prev_real = real[prev_t] if prev_t < len(real) else None
-                        if not prev_real:
-                            continue
-                        rtype = "Precheck" if prev_real["response_type"] == "Prechecked" else "Submit"
-                        if history_summarizer:
-                            summary = history_summarizer._call_llm(
-                                f"{RAG_SUMMARY_PROMPT}\n\n"
-                                f"Problem: {item.question_name}\n"
-                                f"Test result: {prev_real['pass']}\n\n"
-                                f"```cpp\n{prev_real['response'][:3000]}\n```"
-                            )
-                            parts.append(
-                                f"Attempt {prev_t + 1} [{rtype}] -> {prev_real['pass']}\n"
-                                f"Summary: {summary}\n"
-                            )
-                        else:
-                            parts.append(
-                                f"Attempt {prev_t + 1} [{rtype}] -> {prev_real['pass']}\n"
-                            )
-
-                    parts.append(
-                        "Now predict what the student would submit next. "
-                        "Match their coding style and debugging approach."
-                    )
-                    feedback_msg = "\n".join(parts)
-                else:
-                    # Free mode: feedback from LLM's own attempt
-                    if ev and td:
-                        tests_used = last_tests.get(idx, td["public_tests"])
-                        feedback_msg = _build_feedback_message(
-                            last_code[idx], ev, tests_used, history_summarizer
+                for prev_t in range(attempt):
+                    prev_real = real[prev_t] if prev_t < len(real) else None
+                    if not prev_real:
+                        continue
+                    rtype = "Precheck" if prev_real["response_type"] == "Prechecked" else "Submit"
+                    if history_summarizer:
+                        summary = history_summarizer._call_llm(
+                            f"{RAG_SUMMARY_PROMPT}\n\n"
+                            f"Problem: {item.question_name}\n"
+                            f"Test result: {prev_real['pass']}\n\n"
+                            f"```cpp\n{prev_real['response'][:3000]}\n```"
+                        )
+                        parts.append(
+                            f"Attempt {prev_t + 1} [{rtype}] -> {prev_real['pass']}\n"
+                            f"Summary: {summary}\n"
                         )
                     else:
-                        feedback_msg = "Please try again.\n"
+                        parts.append(
+                            f"Attempt {prev_t + 1} [{rtype}] -> {prev_real['pass']}\n"
+                        )
+
+                parts.append(
+                    "Now predict what the student would submit next. "
+                    "Match their coding style and debugging approach."
+                )
+                feedback_msg = "\n".join(parts)
 
                 if conv:
                     conv["messages"].append({"role": "user", "content": feedback_msg})
@@ -512,23 +492,11 @@ def _run_chunk(
                 results[idx].attempts.append(AttemptRecord(
                     attempt, timestamp, "Submit", user_prompts[i], raw, codes[i], pp))
 
-                if grounded:
-                    # Grounded: always continue (stopping handled by attempt filter)
-                    last_eval[idx] = ev
-                    last_tests[idx] = td["test_cases"] if td else []
-                    next_active.append(idx)
-                    if passed:
-                        n_passed += 1
-                elif passed:
+                last_eval[idx] = ev
+                last_tests[idx] = td["test_cases"] if td else []
+                next_active.append(idx)
+                if passed:
                     n_passed += 1
-                else:
-                    prev = last_pass_pattern.get(idx)
-                    stall_count[idx] = stall_count[idx] + 1 if prev == pp else 0
-                    last_pass_pattern[idx] = pp
-                    if stall_count[idx] < early_stop_patience:
-                        last_eval[idx] = ev
-                        last_tests[idx] = td["test_cases"] if td else []
-                        next_active.append(idx)
             else:
                 n_prechecks += 1
                 if i in precheck_results:
