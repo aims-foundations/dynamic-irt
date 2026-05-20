@@ -3,7 +3,7 @@
 Core module providing run_evaluation() which runs the attempt loop:
 build prompt → call LLM → grade code → feedback → repeat.
 
-Entry point is run_student_split.py, not this file directly.
+Entry point is eval_student_split.py, not this file directly.
 """
 
 import json

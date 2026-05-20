@@ -60,21 +60,16 @@ CodeInsights/
 │       ├── run_temporal_eval.py  # CLI entry point
 │       └── adapters/          # Per-model adapters (Elo, CIRT, GPIRT, ...)
 │
-├── llm_simulator/             # LLM student simulation
-│   ├── runners.py             # Unified model runners + registry
-│   ├── prompts.py             # Prompt builder (zero-shot / few-shot / feedback)
-│   ├── data_loader.py         # Data loading + example selection
-│   ├── run.py                 # Unified CLI entry point
-│   ├── grading_engine.py      # C++ compilation and test execution
-│   ├── data_preprocessing.py  # Generate scenario datasets from HF
-│   ├── config.py              # Legacy prompt templates (used by training)
-│   ├── utils.py               # Inference utilities (used by training)
-│   └── training/              # SFT fine-tuning pipeline
-│       ├── build_dataset.py   # Build SFT training datasets
-│       ├── sft.py             # SFT training wrapper (TRL)
-│       ├── main_optimize.py   # Hyperparameter optimization
-│       ├── merge_model.py     # LoRA merge + HF push
-│       └── configs/           # YAML training configs
+├── llm_simulator/             # LLM student simulation (grounded evaluation)
+│   ├── eval_student_split.py  # Entry point: orchestrates the full pipeline
+│   ├── run.py                 # Core attempt loop: prompt → LLM → grade → repeat
+│   ├── student_split_loader.py # Loads split data, computes item difficulty
+│   ├── persona.py             # Builds behavioral profiles from weeks 1-3
+│   ├── rag.py                 # TF-IDF retrieval of similar prior submissions
+│   ├── summarize.py           # Compresses submission history via Haiku
+│   ├── prompts.py             # Prompt construction and response parsing
+│   ├── runners.py             # LLM API wrappers (Claude, GPT, Gemini, Mistral, vLLM)
+│   └── data_loader.py         # Dataclass definitions and test-case parsing
 │
 ├── script/                    # Reproducibility pipeline [TODO: I think this is very outdated]
 │   ├── reproduce.sh           # Full pipeline (Steps 1-7)
@@ -139,18 +134,32 @@ For GPIRT Operational note:
 
 ## LLM Simulator
 
-Treats language models as student behavior generators: questions in, code responses out. The goal of the LLM is to "imitate this student" — parameterized by:
-- `--n_examples N`: number of in-context previous items trajectory (0 = zero-shot, N = few-shot with student code)
-- `--max_attempts N`: retry budget (1 = single-shot, >1 = iterative with compile/test feedback)
+Evaluates whether LLMs can predict real student behavior on programming problems. Uses a **grounded evaluation** approach: the LLM follows each student's real attempt trajectory step-by-step and predicts the next submission, rather than generating code freely.
 
-All metrics (functional correctness, AST similarity, CodeBERT, mistake alignment, runtime) are computed on every output. We supported both commerical model (`claude` (claude-sonnet-4), `gpt` (gpt-4.1-nano), `gemini` (gemini-2.0-flash), `mistral` (mistral-large-latest)) as well as open-source models (via vLLM): `llama` (Llama-3.1-8B), `gemma` (Gemma-3-27B), `qwen` (Qwen2.5-14B), `glm` (GLM-4.7-AWQ).
+### Data Split
+- **Train students (70%)**: compute item difficulty metrics
+- **Test students (30%)**: evaluation targets
+  - Weeks 1-3: build persona + RAG context
+  - Weeks 4-6: prediction targets (attempt-by-attempt)
+
+The simulator uses the same student split as the psychometric models (IRT, CIRT, BKT, DKT), enabling direct comparison.
+
+### Supported Models
+Commercial: `claude` (Opus), `haiku`, `gpt` (GPT-4.1-nano), `gemini` (Gemini 2.0 Flash), `mistral` (Mistral Large).
+Open-source (via vLLM): `llama` (Llama-3.1-8B), `gemma` (Gemma-3-27B), `qwen` (Qwen2.5-14B), `glm` (GLM-4.7-AWQ).
 
 ```bash
-python -m llm_simulator.data_preprocessing
-python -m llm_simulator.run --models glm --max_attempts 100
+# Full evaluation on a course
+python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku
+
+# Quick test with subset
+python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku --max_students 5 --max_questions 3 --dry_run
+
+# Multiple models
+python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku claude gpt
 ```
 
-[TODO]: The human data (D1) and LLM-simulated data (D2) should share a canonical format. Any dynamic model can consume either dataset identically, enabling direct comparison of latent statistics (ability trajectories, difficulty estimates, learning curves).
+Output: `results/llm_student_eval/{course}/{model}_attempts{N}.jsonl`
 
 ## Comparative Analysis
 [TODO] Largely not done

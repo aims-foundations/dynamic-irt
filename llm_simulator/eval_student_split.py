@@ -4,8 +4,8 @@ Uses the same (data, split) as psychometric models (IRT, CIRT, BKT, DKT)
 to ensure identical filtered students, items, and split indices.
 
 Usage:
-    python -m llm_simulator.run_student_split --course dsa_hk231 --models haiku
-    python -m llm_simulator.run_student_split --course dsa_hk231 --models haiku --max_students 5 --max_questions 3 --dry_run
+    python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku
+    python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku --max_students 5 --max_questions 3 --dry_run
 """
 
 import argparse
