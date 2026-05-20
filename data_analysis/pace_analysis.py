@@ -118,7 +118,7 @@ def load_data_from_huggingface(course_name: str = None) -> tuple[pd.DataFrame, p
     # Try local cache first
     cache_path = os.path.expanduser(
         "~/.cache/huggingface/hub/datasets--CodeInsightTeam--code_insights_csv/"
-        "snapshots/99d53fe7c11f6302fb28b82fab5ebd77c00e5d12"
+        "snapshots/a88c99da850ddd26e2f4612b5147eb9efead9aa9"
     )
 
     if os.path.exists(cache_path):
@@ -133,7 +133,7 @@ def load_data_from_huggingface(course_name: str = None) -> tuple[pd.DataFrame, p
             repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset"
         )
 
-    main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False)
+    main_data = pd.read_csv(f"{path}/main_data.csv", low_memory=False, on_bad_lines="skip")
     question_infos = pd.read_csv(f"{path}/question_infos.csv")
     course_infos = pd.read_csv(f"{path}/course_infos.csv")
 
