@@ -67,56 +67,11 @@ class LLMRunner:
 
 
 class ClaudeRunner(LLMRunner):
-    # Pricing per million tokens (as of 2025)
-    PRICING = {
-        "claude-opus-4-6": {"input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75},
-        "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0, "cache_read": 0.30, "cache_write": 3.75},
-        "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0, "cache_read": 0.08, "cache_write": 1.0},
-    }
-
     def __init__(self, api_model: str, **kwargs):
         super().__init__(**kwargs)
         import anthropic as _anthropic
         self.client = _anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         self.api_model = api_model
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_cache_read_tokens = 0
-        self.total_cache_write_tokens = 0
-        self.total_cost = 0.0
-        self._call_count = 0
-
-    def _track_usage(self, msg):
-        usage = msg.usage
-        input_t = getattr(usage, "input_tokens", 0)
-        output_t = getattr(usage, "output_tokens", 0)
-        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-        cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
-
-        self.total_input_tokens += input_t
-        self.total_output_tokens += output_t
-        self.total_cache_read_tokens += cache_read
-        self.total_cache_write_tokens += cache_write
-        self._call_count += 1
-
-        # input_tokens includes cached tokens, so subtract them for base rate
-        prices = self.PRICING.get(self.api_model, self.PRICING["claude-opus-4-6"])
-        non_cached_input = input_t - cache_read - cache_write
-        cost = (
-            non_cached_input * prices["input"] / 1_000_000
-            + output_t * prices["output"] / 1_000_000
-            + cache_read * prices["cache_read"] / 1_000_000
-            + cache_write * prices["cache_write"] / 1_000_000
-        )
-        self.total_cost += cost
-
-        if self._call_count % 10 == 0:
-            logger.info(
-                "Cost tracker: %d calls, $%.4f total (in=%dk, out=%dk, cache_r=%dk, cache_w=%dk)",
-                self._call_count, self.total_cost,
-                self.total_input_tokens // 1000, self.total_output_tokens // 1000,
-                self.total_cache_read_tokens // 1000, self.total_cache_write_tokens // 1000,
-            )
 
     def call(
         self, prompt: str, system_prompt: Optional[str] = None,
@@ -133,7 +88,6 @@ class ClaudeRunner(LLMRunner):
         if system_prompt:
             kwargs["system"] = system_prompt
         msg = self.client.messages.create(**kwargs)
-        self._track_usage(msg)
         return msg.content[0].text
 
 
