@@ -384,9 +384,11 @@ def _run_chunk(
                     history_summarizer,
                 )
                 retry_msg = (
-                    f"Your previous submission:\n```cpp\n{last_code[idx]}\n```\n\n"
+                    f"Your previous submission failed some unit tests.\n\n"
+                    f"```cpp\n{last_code[idx]}\n```\n\n"
                     f"{feedback_msg}\n"
-                    "Fix your code to pass all tests."
+                    "Debug your code and fix it to pass all unit tests. "
+                    "Respond with only the corrected ```cpp code block."
                 )
                 if conv:
                     conv["messages"].append({"role": "user", "content": retry_msg})

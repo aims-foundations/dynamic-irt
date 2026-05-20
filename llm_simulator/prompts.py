@@ -117,7 +117,11 @@ def build_direct_solve_prompt(
 ) -> Tuple[str, str]:
     """Build a prompt for the LLM to solve a question directly (no student context)."""
     system_message = (
-        "You are an expert C++ programmer. Solve the given programming problem."
+        "You are an expert C++ programmer. Solve the given programming problem. "
+        "Your code will be tested against hidden unit tests. If your solution "
+        "fails any test cases, you will receive feedback showing your code and "
+        "the failed unit tests, and your goal will be to debug and fix your "
+        "code until all tests pass."
     )
     parts = [
         f"=== Question: {question_name} ===\n{question_text}\n",
