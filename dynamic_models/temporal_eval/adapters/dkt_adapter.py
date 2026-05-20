@@ -369,7 +369,7 @@ class DKTAdapter(ModelAdapter):
         return all_preds
 
     def fit_and_predict_student_split(
-        self, data, split, seed=42, hidden_dim=64, epochs=50,
+        self, data, split, seed=42, hidden_dim=64, epochs=200,
         lr=0.001, batch_size=100, dropout=0.5, **kwargs,
     ):
         torch.manual_seed(seed)

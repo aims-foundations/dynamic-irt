@@ -7,6 +7,7 @@ data estimates ability; predictions are on test students' weeks 4-6.
 Usage:
     python -m dynamic_models.temporal_eval.run_student_eval
     python -m dynamic_models.temporal_eval.run_student_eval --models IRT BKT DKT
+    python -m dynamic_models.temporal_eval.run_student_eval --courses dsa_hk231 dsa_hk221 pf_hk232 pf_hk222 --plot_losses
 """
 
 import argparse
@@ -118,24 +119,96 @@ def run_student_evaluation(
     return results_df, predictions, data
 
 
+COURSE_LABELS = {
+    "dsa_hk231": "DSA 231",
+    "dsa_hk221": "DSA 221",
+    "pf_hk232": "PF 232",
+    "pf_hk222": "PF 222",
+}
+
+
+def plot_loss_curves(all_losses, output_dir):
+    """Plot training loss curves. One figure per model, one subplot per course."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from tueplots import bundles
+
+    plt.rcParams.update(bundles.icml2022())
+    plt.rcParams.update({"text.usetex": True})
+
+    models = sorted({m for cl in all_losses.values() for m in cl})
+    courses = list(all_losses.keys())
+    os.makedirs(output_dir, exist_ok=True)
+
+    for model_name in models:
+        model_data = {c: all_losses[c][model_name]
+                      for c in courses if model_name in all_losses[c]}
+        if not model_data:
+            continue
+
+        n = len(model_data)
+        ncols = min(n, 2)
+        nrows = (n + ncols - 1) // ncols
+
+        fig, axes = plt.subplots(nrows, ncols, figsize=(3.25 * ncols, 2.2 * nrows))
+        axes = np.atleast_1d(axes).flatten()
+
+        for i, (course, losses) in enumerate(model_data.items()):
+            ax = axes[i]
+            epochs = np.arange(1, len(losses) + 1)
+            ax.plot(epochs, losses, linewidth=0.8)
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Training Loss")
+            ax.set_title(COURSE_LABELS.get(course, course))
+
+        for i in range(n, len(axes)):
+            axes[i].set_visible(False)
+
+        fig.suptitle(model_name, y=1.02)
+        fig.tight_layout()
+
+        path = os.path.join(output_dir, f"{model_name.lower()}_loss.pdf")
+        fig.savefig(path, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Loss curve saved: {path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Student-based evaluation")
     parser.add_argument("--course_name", type=str, default="dsa_hk231")
+    parser.add_argument("--courses", type=str, nargs="+", default=None)
     parser.add_argument("--models", type=str, nargs="+", default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--plot_losses", action="store_true")
     args = parser.parse_args()
 
-    output_dir = args.output_dir or os.path.join(
-        REPO_ROOT, "results", "student_eval", args.course_name
-    )
+    courses = args.courses or [args.course_name]
 
-    run_student_evaluation(
-        course_name=args.course_name,
-        models=args.models,
-        seed=args.seed,
-        output_dir=output_dir,
-    )
+    all_losses = {}
+    for course in courses:
+        output_dir = args.output_dir or os.path.join(
+            REPO_ROOT, "results", "student_eval", course
+        )
+
+        _, predictions, _ = run_student_evaluation(
+            course_name=course,
+            models=args.models,
+            seed=args.seed,
+            output_dir=output_dir,
+        )
+
+        course_losses = {}
+        for model_name, pred in predictions.items():
+            if pred.losses and "train" in pred.losses:
+                course_losses[model_name] = pred.losses["train"]
+        all_losses[course] = course_losses
+
+    if args.plot_losses and all_losses:
+        loss_dir = os.path.join(REPO_ROOT, "results", "loss_curves")
+        plot_loss_curves(all_losses, loss_dir)
+
     print("\nDone!")
 
 

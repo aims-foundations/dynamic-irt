@@ -113,11 +113,25 @@ class EloAdapter(ModelAdapter):
                 f"No test observations for cutoff_week={split.cutoff_week}"
             )
 
+        theta_values = np.array(list(theta.values()))
+        difficulty_values = np.array(list(difficulty.values()))
+
         return PredictionResult(
             y_true=np.array(test_y_true),
             y_pred_prob=np.array(test_y_pred),
             student_indices=np.array(test_student_ids),
             item_indices=np.array(test_item_ids),
+            student_params={
+                "theta (ability)": theta_values,
+            },
+            item_params={
+                "difficulty": difficulty_values,
+            },
+            model_state={
+                "theta": dict(theta),
+                "difficulty": dict(difficulty),
+                "K": K,
+            },
         )
 
     def estimated_runtime_minutes(self, data: UnifiedData) -> float:

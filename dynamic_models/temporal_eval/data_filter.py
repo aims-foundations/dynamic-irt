@@ -1,14 +1,19 @@
-"""Shared data filtering thresholds for temporal evaluation.
+"""Shared data filtering for temporal evaluation.
 
-These filters select a meaningful subset of questions and students
-from the raw correctness matrix, used consistently across visualization
-and model training.
+Single entry point: filter_data(data, config) applies quality thresholds,
+subsets the data to passing students/items, and caps the attempt dimension.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
+
+if TYPE_CHECKING:
+    from .data_loader import UnifiedData
 
 
 @dataclass
@@ -25,13 +30,8 @@ class DataFilterConfig:
 DEFAULT_FILTER = DataFilterConfig()
 
 
-def apply_filter(correctness_matrix, question_infos, config=None):
-    """Apply filtering thresholds to identify valid questions and students.
-
-    Args:
-        correctness_matrix: [n_students, n_items, n_max_attempts] tensor, -1 = missing.
-        question_infos: DataFrame with columns qidx, week.
-        config: DataFilterConfig. Uses DEFAULT_FILTER if None.
+def _compute_filter_indices(correctness_matrix, question_infos, config):
+    """Compute which students/items pass quality thresholds.
 
     Returns:
         Tuple of (student_indices, item_indices, selected_qidxs) as numpy arrays.
@@ -98,6 +98,68 @@ def apply_filter(correctness_matrix, question_infos, config=None):
         active_students = np.array(progressing) if progressing else np.array([], dtype=int)
 
     return active_students, col_indices, selected_qs
+
+
+def filter_data(data: "UnifiedData", config: DataFilterConfig = None) -> "UnifiedData":
+    """Apply quality filter, subset data, and cap attempts. Single entry point.
+
+    Steps:
+      1. Select questions/students passing quality thresholds
+      2. Subset matrices and metadata to those indices
+      3. Truncate attempt dimension to config.max_attempts
+    """
+    from .data_loader import UnifiedData
+
+    if config is None:
+        config = DEFAULT_FILTER
+
+    student_idx, item_idx, _ = _compute_filter_indices(
+        data.correctness_matrix, data.question_infos, config
+    )
+
+    if len(item_idx) == 0 or len(student_idx) == 0:
+        raise ValueError("No students or items passed quality filter")
+
+    corr = data.correctness_matrix[student_idx][:, item_idx]
+    time = data.time_matrix[student_idx][:, item_idx]
+    qi = data.question_infos.iloc[item_idx].reset_index(drop=True)
+    item_week = data.item_week[item_idx]
+    student_ids = [data.student_ids[i] for i in student_idx]
+
+    # Cap attempts
+    max_a = config.max_attempts
+    if corr.shape[2] > max_a:
+        corr = corr[:, :, :max_a]
+        time = time[:, :, :max_a]
+
+    # Filter main_data CSV
+    sid_set = set(student_ids)
+    main_data = data.main_data[data.main_data["student_id"].isin(sid_set)].copy()
+    if "question_unittest_id" in data.main_data.columns:
+        kept_qids = set()
+        for idx in item_idx:
+            row = data.question_infos.iloc[idx]
+            if "question_unittest_id" in row.index:
+                kept_qids.add(int(row["question_unittest_id"]))
+        if kept_qids:
+            main_data = main_data[
+                main_data["question_unittest_id"].isin(kept_qids)
+            ].copy()
+
+    n_s, n_i, n_a = corr.shape
+    return UnifiedData(
+        main_data=main_data,
+        correctness_matrix=corr,
+        time_matrix=time,
+        question_infos=qi,
+        item_week=item_week,
+        qid_to_week=data.qid_to_week,
+        student_ids=student_ids,
+        n_students=n_s,
+        n_items=n_i,
+        n_max_attempts=n_a,
+        course_name=data.course_name,
+    )
 
 
 def _collapse_last_attempt(corr, max_attempt=None):
