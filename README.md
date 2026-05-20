@@ -145,7 +145,7 @@ Evaluates whether LLMs can predict real student behavior on programming problems
 The simulator uses the same student split as the psychometric models (IRT, CIRT, BKT, DKT), enabling direct comparison.
 
 ### Supported Models
-Commercial: `claude` (Opus), `haiku`, `gpt` (GPT-4.1-nano), `gemini` (Gemini 2.0 Flash), `mistral` (Mistral Large).
+Commercial: `opus` (Claude Opus), `haiku` (Claude Haiku), `gpt` (GPT-4.1-nano), `gemini` (Gemini 2.0 Flash), `mistral` (Mistral Large).
 Open-source (via vLLM): `llama` (Llama-3.1-8B), `gemma` (Gemma-3-27B), `qwen` (Qwen2.5-14B), `glm` (GLM-4.7-AWQ).
 
 ```bash
@@ -156,7 +156,7 @@ python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku
 python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku --max_students 5 --max_questions 3 --dry_run
 
 # Multiple models
-python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku claude gpt
+python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku opus gpt
 ```
 
 Output: `results/llm_student_eval/{course}/{model}_attempts{N}.jsonl`

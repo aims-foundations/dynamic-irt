@@ -250,7 +250,7 @@ class VLLMRunner(LLMRunner):
 
 MODEL_CONFIGS: Dict[str, dict] = {
     # Commercial API models
-    "claude": {
+    "opus": {
         "api_model": "claude-opus-4-6",
         "backend": "anthropic",
         "max_workers": 10,
