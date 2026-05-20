@@ -1,12 +1,13 @@
-# CodeInsight: Modeling Student Learning Dynamics
+# Dynamic Measurement Model
 
-Predicting how students improve over time is a fundamental challenge in educational assessment. This project compares classical knowledge-tracing models (IRT, CIRT, BKT, DKT) with an LLM-based predictor on longitudinal programming submissions, using a shared student-split evaluation framework that ensures identical data splits across all approaches.
+A research project focused on measuring unobserved quantities that change over time, such as latent ability during learning. The project combines probabilistic latent dynamic models (IRT, CIRT, BKT, DKT) with LLM-based prediction to model student learning trajectories from programming submissions. All models share a student-split evaluation framework, enabling direct comparison on identical data splits.
 
-Paper: [EMNLP 2026 submission](https://aclanthology.org/2025.aimecon-main.43.pdf)
+Related paper: https://aclanthology.org/2025.aimecon-main.43.pdf
 
 ## Dataset
 
-[`CodeInsightTeam/code_insights_csv`](https://huggingface.co/datasets/CodeInsightTeam/code_insights_csv) contains C++ submissions from first-year university students. 4 courses (DSA-HK231, DSA-HK221, PF-HK232, PF-HK222), 3,286 students, 396 problems, 3M+ submissions.
+We use CodeInsight data from first-year university students learning C++ (includes both pass/fail and raw code).
+Data source: [`CodeInsightTeam/code_insights_csv`](https://huggingface.co/datasets/CodeInsightTeam/code_insights_csv). 4 courses (DSA-HK231, DSA-HK221, PF-HK232, PF-HK222), 3,286 students, 396 problems, 3M+ submissions.
 
 ```
 student_id      : str    -- learner identifier
@@ -33,19 +34,19 @@ export HF_TOKEN="..."
 │   ├── csv2matrices.py        # CSV -> 3D tensor matrices
 │   └── skill_tagging/         # LLM-based skill labeling for questions
 │
-├── data_analysis/             # Paper figure scripts + dataset analysis
-│   ├── plot_filtered_accuracy.py          # Per-attempt accuracy (Fig. 3)
-│   ├── kendall_tau_decomposition.py       # Kendall tau decomposition (Fig. 5)
-│   ├── llm_behavioral_comparison.py       # Behavioral comparison (Fig. 6)
-│   ├── llm_bug_comparison.py              # Error type flow (Fig. 4)
-│   ├── visualize_response_matrix.py       # Attempt progression (Fig. 1-2)
-│   ├── learning_curves_by_year.py         # Learning curves (Fig. data)
+├── data_analysis/             # Analysis scripts + paper figure generation
+│   ├── plot_filtered_accuracy.py          # Per-attempt accuracy
+│   ├── kendall_tau_decomposition.py       # Kendall tau decomposition
+│   ├── llm_behavioral_comparison.py       # Behavioral comparison
+│   ├── llm_bug_comparison.py              # Error type flow
+│   ├── visualize_response_matrix.py       # Attempt progression heatmaps
+│   ├── learning_curves_by_year.py         # Learning curves
 │   ├── dataset_summary_table.py           # Dataset summary table
-│   ├── student_behavior_clustering.py     # Student behavior (Appendix)
-│   ├── problem_by_problem_analysis.py     # Problem patterns (Appendix)
-│   └── pace_analysis.py                   # Submission pacing (Appendix)
+│   ├── student_behavior_clustering.py     # Student behavior clustering
+│   ├── problem_by_problem_analysis.py     # Problem-level patterns
+│   └── pace_analysis.py                   # Submission pacing
 │
-├── dynamic_models/            # Knowledge-tracing models
+├── dynamic_models/            # Probabilistic latent dynamic models
 │   ├── cirt.py                # Continuous IRT (temporal decay)
 │   ├── dynamic_irt.py         # Dynamic IRT (time-varying traits)
 │   ├── elo.py                 # Elo rating system
@@ -60,14 +61,9 @@ export HF_TOKEN="..."
 │       ├── data_loader.py         # Unified data loading + caching
 │       ├── metrics.py             # AUC, accuracy, F1, log-likelihood
 │       ├── plot_results.py        # Loss curves, diagnostics
-│       └── adapters/              # Per-model adapters
-│           ├── irt_adapter.py
-│           ├── cirt_adapter.py
-│           ├── bkt_adapter.py
-│           ├── dkt_adapter.py
-│           └── ...
+│       └── adapters/              # Per-model adapters (IRT, CIRT, BKT, DKT, ...)
 │
-├── llm_simulator/             # LLM-as-Predictor (grounded evaluation)
+├── llm_simulator/             # LLM student simulation (grounded evaluation)
 │   ├── eval_student_split.py  # Entry point: orchestrates the full pipeline
 │   ├── run.py                 # Core attempt loop: prompt → LLM → grade → repeat
 │   ├── persona.py             # Builds behavioral profiles from weeks 1-3
@@ -83,19 +79,17 @@ export HF_TOKEN="..."
 └── overleaf/                  # LaTeX paper (EMNLP 2026, ACL format)
 ```
 
-## Evaluation Framework
+## Student-Split Evaluation
 
-All models are evaluated using the same student-split protocol:
+All models are evaluated using a shared student-split protocol:
 
-1. **Quality filtering**: Remove students and items below coverage/pass-rate thresholds (configurable via `DataFilterConfig`)
-2. **Student split**: Randomly partition students into 70% train / 30% test (seed-controlled for reproducibility)
-3. **Train phase**: Train students' responses across all weeks estimate item difficulty parameters
-4. **Calibration phase**: Test students' weeks 1-3 responses calibrate their ability estimates
-5. **Prediction phase**: Predict test students' performance on weeks 4-6
+1. **Quality filtering** — Remove students and items below coverage/pass-rate thresholds
+2. **Student split** — Randomly partition into 70% train / 30% test students (seed-controlled)
+3. **Train phase** — Train students' responses estimate item difficulty parameters across all weeks
+4. **Calibration** — Test students' weeks 1-3 responses calibrate their ability estimates
+5. **Prediction** — Predict test students' performance on weeks 4-6
 
-This shared split ensures knowledge-tracing models and the LLM predictor are evaluated on identical student-item pairs.
-
-### Running the evaluation
+This shared split ensures all models (knowledge-tracing and LLM) are evaluated on identical student-item pairs.
 
 ```bash
 # Run all models (IRT, CIRT, BKT, DKT) on all courses
@@ -108,19 +102,19 @@ python -m dynamic_models.temporal_eval.run_student_eval --models IRT BKT DKT --c
 python -m dynamic_models.temporal_eval.run_student_eval --plot_losses
 ```
 
-Results are saved to `results/student_eval/{course}/student_eval.csv` with per-model metrics (AUC, accuracy, F1, log-likelihood). Trained model predictions are serialized as `{model}_student_pred.pkl`.
+Results saved to `results/student_eval/{course}/student_eval.csv`.
 
 ## LLM Simulator
 
 Evaluates whether LLMs can predict real student behavior on programming problems. Uses a **grounded evaluation** approach: the LLM follows each student's real attempt trajectory step-by-step and predicts the next submission, rather than generating code freely.
 
-The simulator uses the same student split as the knowledge-tracing models, enabling direct comparison. For each test student on each target question (weeks 4-6):
+The simulator uses the same student split as the knowledge-tracing models. For each test student on each target question (weeks 4-6):
 
-1. **Persona**: Build a behavioral profile from weeks 1-3 (submission pacing, precheck usage, topic pass rates, code complexity)
-2. **RAG**: Retrieve the student's most similar prior problem trajectories via TF-IDF
-3. **Summarize**: Compress retrieved trajectories into behavioral summaries (via Claude Haiku)
-4. **Predict**: At each attempt, the LLM sees the student's full trajectory so far and predicts the next submission
-5. **Grade**: The predicted code is compiled and graded against unit tests
+1. Build a behavioral **persona** from weeks 1-3 (submission pacing, precheck usage, topic pass rates, code complexity)
+2. Retrieve similar prior problem trajectories via **TF-IDF** (RAG)
+3. Compress retrieved trajectories into behavioral **summaries** (via Claude Haiku)
+4. At each attempt, the LLM sees the student's full trajectory so far and predicts the next submission
+5. The predicted code is compiled and **graded** against unit tests
 
 ### Supported Models
 Commercial: `opus` (Claude Opus), `haiku` (Claude Haiku), `gpt` (GPT-4.1-nano), `gemini` (Gemini 2.0 Flash), `mistral` (Mistral Large).
@@ -148,14 +142,9 @@ bash scripts/build_figures.sh
 
 # Regenerate with fresh grading cache
 bash scripts/build_figures.sh --regrade
-
-# Rebuild trajectory metrics
-bash scripts/build_figures.sh --rebuild-trajectories
 ```
 
 ## Reproducibility
-
-Full pipeline from evaluation to paper figures:
 
 ```bash
 # 1. Run knowledge-tracing models
