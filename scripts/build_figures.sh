@@ -42,7 +42,7 @@ PYTHONPATH=. python3 data_analysis/llm_bug_comparison.py
 cp results/llm_predictor/bug_comparison/error_type_flow.png "$OVERLEAF_FIGS/"
 
 echo "=== Kendall tau decomposition ==="
-PYTHONPATH=. python3 data_analysis/llm_prediction_deep_analysis.py
+PYTHONPATH=. python3 data_analysis/kendall_tau_decomposition.py
 cp results/llm_predictor/student_split/decomposition_test.png "$OVERLEAF_FIGS/"
 
 echo "=== Behavioral comparison ==="
