@@ -63,13 +63,12 @@ CodeInsights/
 ├── llm_simulator/             # LLM student simulation (grounded evaluation)
 │   ├── eval_student_split.py  # Entry point: orchestrates the full pipeline
 │   ├── run.py                 # Core attempt loop: prompt → LLM → grade → repeat
-│   ├── student_split_loader.py # Loads split data, computes item difficulty
 │   ├── persona.py             # Builds behavioral profiles from weeks 1-3
 │   ├── rag.py                 # TF-IDF retrieval of similar prior submissions
 │   ├── summarize.py           # Compresses submission history via Haiku
 │   ├── prompts.py             # Prompt construction and response parsing
 │   ├── runners.py             # LLM API wrappers (Claude, GPT, Gemini, Mistral, vLLM)
-│   └── data_loader.py         # Dataclass definitions and test-case parsing
+│   └── data_loader.py         # Data structures, student-split loading, item difficulty
 │
 ├── script/                    # Reproducibility pipeline [TODO: I think this is very outdated]
 │   ├── reproduce.sh           # Full pipeline (Steps 1-7)

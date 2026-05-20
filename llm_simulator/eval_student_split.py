@@ -25,7 +25,7 @@ from .data_loader import infer_public_test_counts
 from .prompts import build_prompt
 from .rag import RAGRetriever
 from .run import MODEL_CONFIGS, run_evaluation, save_results
-from .student_split_loader import load_student_split_eval_items
+from .data_loader import load_student_split_eval_items
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
