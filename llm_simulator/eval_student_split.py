@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from dynamic_models.temporal_eval.data_loader import load_student_split_data
 
 from .data_loader import infer_public_test_counts
-from .prompts import build_prompt
+from .prompts import build_direct_solve_prompt, build_prompt
 from .rag import RAGRetriever
 from .run import MODEL_CONFIGS, run_evaluation, save_results
 from .data_loader import load_student_split_eval_items
@@ -62,6 +62,8 @@ def main():
                         help="Save all prompts and responses to this file")
     parser.add_argument("--no_persona", action="store_true")
     parser.add_argument("--no_summarize", action="store_true")
+    parser.add_argument("--direct_solve", action="store_true",
+                        help="Ablation: LLM solves questions directly without student context")
     args = parser.parse_args()
 
     # 1. Load data (same as psychometric models)
@@ -104,151 +106,179 @@ def main():
     question_infos = pd.read_csv(f"{hf_dir}/question_infos.csv")
     course_infos = pd.read_csv(f"{hf_dir}/course_infos.csv")
 
-    # 4. Build RAG with student split boundary
-    train_sids = set(str(data.student_ids[i]) for i in split.train_student_indices)
-    test_sids = set(str(data.student_ids[i]) for i in split.test_student_indices)
+    # Direct solve: deduplicate to unique questions, skip persona/RAG
+    if args.direct_solve:
+        seen_questions = set()
+        deduped = []
+        for item in items:
+            if item.question_id not in seen_questions:
+                seen_questions.add(item.question_id)
+                item.student_id = "direct_solve"
+                item._real_attempts = []
+                item._self_summaries = None
+                item._question_metadata = None
+                item._question_summary = None
+                deduped.append(item)
+        items = deduped
+        logger.info("Direct solve: deduplicated to %d unique questions", len(items))
 
-    rag = RAGRetriever.from_student_split(
-        full_main_df, question_infos,
-        train_student_ids=train_sids,
-        test_student_ids=test_sids,
-        train_week_cutoff=split.train_week_cutoff,
-        qid_to_week=data.qid_to_week,
-    )
-
-    # 5. Build persona builder
-    persona_builder = None
-    if not args.no_persona:
-        from .persona import PersonaBuilder
-        section_infos = pd.read_csv(f"{hf_dir}/section_infos.csv")
-        # Persona uses same filtered data as RAG
-        train_mask = full_main_df["student_id"].astype(str).isin(train_sids)
-        test_mask = full_main_df["student_id"].astype(str).isin(test_sids)
-        test_week = full_main_df["question_unittest_id"].map(
-            lambda q: data.qid_to_week.get(int(q), 99) if pd.notna(q) else 99
-        )
-        persona_df = full_main_df[train_mask | (test_mask & (test_week <= split.train_week_cutoff))]
-        persona_builder = PersonaBuilder(
-            persona_df, question_infos,
-            course_infos=course_infos, section_infos=section_infos,
-        )
-        logger.info("PersonaBuilder: %d students", len(persona_builder))
-
-    # 6. Init summarizer
-    summarizer = None
-    if not args.no_summarize:
-        from .summarize import HistorySummarizer
-        summarizer = HistorySummarizer()
-
-    # Build question name -> HF row lookup for self-summary question descriptions
-    hf_lookup = {}
-    for _, row in question_infos.iterrows():
-        hf_lookup[row["question_name"]] = row
-
-    # 7. Pre-compute summaries for each item
-    logger.info("Pre-computing self summaries...")
-    item_self_summaries = {}
-    item_metadata = {}
-
-    # Collect RAG self-trajectories (fast, no LLM calls)
-    item_selfs = {}
-    for i, item in enumerate(items):
-        target_week = rag._q_id_to_week.get(str(item.question_id))
-        item_selfs[i] = rag.retrieve_self_trajectories(
-            item.student_id, item.question_id,
-            max_self=args.n_self, target_week=target_week,
-        )
-        diff = difficulties.get(item.question_name)
-        if diff:
-            item_metadata[i] = _format_question_metadata(diff)
-
-    if summarizer:
-        from .summarize import SELF_SUMMARY_PROMPT, QUESTION_SUMMARY_PROMPT
-
-        all_prompts = []
-        prompt_map = []  # (item_idx, type, sub_idx)
-
-        for i, item in enumerate(items):
-            # Self prompts (question summary + approach)
-            for j, s in enumerate(item_selfs.get(i, [])):
-                hf_row = hf_lookup.get(s.question_name)
-                q_text_str = str(hf_row["question_text"]) if hf_row is not None else ""
-                q_prompt = f"{QUESTION_SUMMARY_PROMPT}\n\nProblem: {s.question_name}\n{q_text_str[:1000]}"
-                all_prompts.append(q_prompt)
-                prompt_map.append((i, "self_q", j))
-                attempts_block = []
-                for k, a in enumerate(s.attempts, 1):
-                    rtype = "Precheck" if a["response_type"] == "Prechecked" else "Submit"
-                    attempts_block.append(f"Attempt {k} [{rtype}] result: {a['pass_pattern']}\n{a['response']}")
-                a_prompt = f"{SELF_SUMMARY_PROMPT}\n\nProblem: {s.question_name}\n\n" + "\n\n".join(attempts_block)
-                all_prompts.append(a_prompt)
-                prompt_map.append((i, "self_a", j))
-
-            # Target question summary
-            q_prompt = f"{QUESTION_SUMMARY_PROMPT}\n\nProblem: {item.question_name}\n{item.question_text[:1000]}"
-            all_prompts.append(q_prompt)
-            prompt_map.append((i, "target_q", 0))
-
-        logger.info("Batch summarizing %d prompts...", len(all_prompts))
-        all_results = summarizer.batch_call_llm(all_prompts, max_workers=20)
-
-        self_q_results = {}
-        self_a_results = {}
-        target_q_results = {}
-
-        for idx, (i, typ, j) in enumerate(prompt_map):
-            r = all_results[idx] or ""
-            if typ == "self_q":
-                self_q_results[(i, j)] = r
-            elif typ == "self_a":
-                self_a_results[(i, j)] = r
-            elif typ == "target_q":
-                target_q_results[i] = r
-
-        for i, item in enumerate(items):
-            selfs = item_selfs.get(i, [])
-            if selfs:
-                entries = []
-                for j, s in enumerate(selfs):
-                    q_sum = self_q_results.get((i, j), "")
-                    approach = self_a_results.get((i, j), "")
-                    entries.append(f"[{s.question_name}] {q_sum}\nStudent's approach: {approach}")
-                item_self_summaries[i] = entries
-
-            item._question_summary = target_q_results.get(i)
+        persona_builder = None
+        summarizer = None
+        if not args.no_summarize:
+            from .summarize import HistorySummarizer
+            summarizer = HistorySummarizer()
     else:
+        # 4. Build RAG with student split boundary
+        train_sids = set(str(data.student_ids[i]) for i in split.train_student_indices)
+        test_sids = set(str(data.student_ids[i]) for i in split.test_student_indices)
+
+        rag = RAGRetriever.from_student_split(
+            full_main_df, question_infos,
+            train_student_ids=train_sids,
+            test_student_ids=test_sids,
+            train_week_cutoff=split.train_week_cutoff,
+            qid_to_week=data.qid_to_week,
+        )
+
+        # 5. Build persona builder
+        persona_builder = None
+        if not args.no_persona:
+            from .persona import PersonaBuilder
+            section_infos = pd.read_csv(f"{hf_dir}/section_infos.csv")
+            train_mask = full_main_df["student_id"].astype(str).isin(train_sids)
+            test_mask = full_main_df["student_id"].astype(str).isin(test_sids)
+            test_week = full_main_df["question_unittest_id"].map(
+                lambda q: data.qid_to_week.get(int(q), 99) if pd.notna(q) else 99
+            )
+            persona_df = full_main_df[train_mask | (test_mask & (test_week <= split.train_week_cutoff))]
+            persona_builder = PersonaBuilder(
+                persona_df, question_infos,
+                course_infos=course_infos, section_infos=section_infos,
+            )
+            logger.info("PersonaBuilder: %d students", len(persona_builder))
+
+        # 6. Init summarizer
+        summarizer = None
+        if not args.no_summarize:
+            from .summarize import HistorySummarizer
+            summarizer = HistorySummarizer()
+
+        # Build question name -> HF row lookup for self-summary question descriptions
+        hf_lookup = {}
+        for _, row in question_infos.iterrows():
+            hf_lookup[row["question_name"]] = row
+
+        # 7. Pre-compute summaries for each item
+        logger.info("Pre-computing self summaries...")
+        item_self_summaries = {}
+        item_metadata = {}
+
+        # Collect RAG self-trajectories (fast, no LLM calls)
+        item_selfs = {}
         for i, item in enumerate(items):
-            selfs = item_selfs.get(i, [])
-            if selfs:
-                item_self_summaries[i] = [
-                    f"[{s.question_name}] {len(s.attempts)} attempts" for s in selfs
-                ]
-            item._question_summary = None
+            target_week = rag._q_id_to_week.get(str(item.question_id))
+            item_selfs[i] = rag.retrieve_self_trajectories(
+                item.student_id, item.question_id,
+                max_self=args.n_self, target_week=target_week,
+            )
+            diff = difficulties.get(item.question_name)
+            if diff:
+                item_metadata[i] = _format_question_metadata(diff)
 
-    logger.info("Summaries complete: %d self, %d metadata",
-                len(item_self_summaries), len(item_metadata))
+        if summarizer:
+            from .summarize import SELF_SUMMARY_PROMPT, QUESTION_SUMMARY_PROMPT
 
-    # 8. Inject summaries into items
-    for i, item in enumerate(items):
-        item._self_summaries = item_self_summaries.get(i)
-        item._question_metadata = item_metadata.get(i)
+            all_prompts = []
+            prompt_map = []  # (item_idx, type, sub_idx)
+
+            for i, item in enumerate(items):
+                # Self prompts (question summary + approach)
+                for j, s in enumerate(item_selfs.get(i, [])):
+                    hf_row = hf_lookup.get(s.question_name)
+                    q_text_str = str(hf_row["question_text"]) if hf_row is not None else ""
+                    q_prompt = f"{QUESTION_SUMMARY_PROMPT}\n\nProblem: {s.question_name}\n{q_text_str[:1000]}"
+                    all_prompts.append(q_prompt)
+                    prompt_map.append((i, "self_q", j))
+                    attempts_block = []
+                    for k, a in enumerate(s.attempts, 1):
+                        rtype = "Precheck" if a["response_type"] == "Prechecked" else "Submit"
+                        attempts_block.append(f"Attempt {k} [{rtype}] result: {a['pass_pattern']}\n{a['response']}")
+                    a_prompt = f"{SELF_SUMMARY_PROMPT}\n\nProblem: {s.question_name}\n\n" + "\n\n".join(attempts_block)
+                    all_prompts.append(a_prompt)
+                    prompt_map.append((i, "self_a", j))
+
+                # Target question summary
+                q_prompt = f"{QUESTION_SUMMARY_PROMPT}\n\nProblem: {item.question_name}\n{item.question_text[:1000]}"
+                all_prompts.append(q_prompt)
+                prompt_map.append((i, "target_q", 0))
+
+            logger.info("Batch summarizing %d prompts...", len(all_prompts))
+            all_results = summarizer.batch_call_llm(all_prompts, max_workers=20)
+
+            self_q_results = {}
+            self_a_results = {}
+            target_q_results = {}
+
+            for idx, (i, typ, j) in enumerate(prompt_map):
+                r = all_results[idx] or ""
+                if typ == "self_q":
+                    self_q_results[(i, j)] = r
+                elif typ == "self_a":
+                    self_a_results[(i, j)] = r
+                elif typ == "target_q":
+                    target_q_results[i] = r
+
+            for i, item in enumerate(items):
+                selfs = item_selfs.get(i, [])
+                if selfs:
+                    entries = []
+                    for j, s in enumerate(selfs):
+                        q_sum = self_q_results.get((i, j), "")
+                        approach = self_a_results.get((i, j), "")
+                        entries.append(f"[{s.question_name}] {q_sum}\nStudent's approach: {approach}")
+                    item_self_summaries[i] = entries
+
+                item._question_summary = target_q_results.get(i)
+        else:
+            for i, item in enumerate(items):
+                selfs = item_selfs.get(i, [])
+                if selfs:
+                    item_self_summaries[i] = [
+                        f"[{s.question_name}] {len(s.attempts)} attempts" for s in selfs
+                    ]
+                item._question_summary = None
+
+        logger.info("Summaries complete: %d self, %d metadata",
+                    len(item_self_summaries), len(item_metadata))
+
+        # 8. Inject summaries into items
+        for i, item in enumerate(items):
+            item._self_summaries = item_self_summaries.get(i)
+            item._question_metadata = item_metadata.get(i)
 
     # 9. Dry run: show sample prompts
     if args.dry_run:
         for item in items[:2]:
-            persona_text = None
-            if persona_builder and item.student_id:
-                persona_text = persona_builder.build_persona_text(item.student_id)
+            if args.direct_solve:
+                prompt = build_direct_solve_prompt(
+                    question_name=item.question_name,
+                    question_text=item.question_text,
+                    question_template=item.question_template,
+                )
+            else:
+                persona_text = None
+                if persona_builder and item.student_id:
+                    persona_text = persona_builder.build_persona_text(item.student_id)
 
-            prompt = build_prompt(
-                question_name=item.question_name,
-                question_text=item.question_text,
-                question_template=item.question_template,
-                persona_text=persona_text,
-                self_summaries=getattr(item, "_self_summaries", None),
-                question_metadata=getattr(item, "_question_metadata", None),
-                question_summary=getattr(item, "_question_summary", None),
-            )
+                prompt = build_prompt(
+                    question_name=item.question_name,
+                    question_text=item.question_text,
+                    question_template=item.question_template,
+                    persona_text=persona_text,
+                    self_summaries=getattr(item, "_self_summaries", None),
+                    question_metadata=getattr(item, "_question_metadata", None),
+                    question_summary=getattr(item, "_question_summary", None),
+                )
 
             if isinstance(prompt, tuple):
                 sys_msg, user_msg = prompt
@@ -275,7 +305,10 @@ def main():
     question_info = full_main_df[["question_unittest_id", "is_exam"]].drop_duplicates(subset=["question_unittest_id"])
     question_to_is_exam = dict(zip(question_info["question_unittest_id"].astype(str), question_info["is_exam"].astype(str)))
 
-    output_dir = os.path.join(args.output_dir, args.course)
+    if args.direct_solve:
+        output_dir = os.path.join(args.output_dir, args.course, "direct_solve")
+    else:
+        output_dir = os.path.join(args.output_dir, args.course)
 
     for model_key in args.models:
         logger.info("=== Running %s ===", model_key)
@@ -293,6 +326,7 @@ def main():
                 persona_builder=persona_builder,
                 history_summarizer=summarizer,
                 prompt_log_file=args.log_prompts,
+                direct_solve=args.direct_solve,
             )
         except Exception as e:
             logger.error("Model %s failed: %s", model_key, e, exc_info=True)

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from .data_loader import EvalItem, parse_test_cases
-from .prompts import build_prompt, extract_action, extract_code
+from .prompts import build_direct_solve_prompt, build_prompt, extract_action, extract_code
 from .runners import MODEL_CONFIGS, create_runner
 
 logger = logging.getLogger(__name__)
@@ -231,6 +231,7 @@ def run_evaluation(
     prompt_log_file=None,
     tensor_parallel_size: int = 1,
     port: Optional[int] = None,
+    direct_solve: bool = False,
 ) -> List[EvalResult]:
     """Run iterative LLM evaluation on a list of items.
 
@@ -246,6 +247,9 @@ def run_evaluation(
     runner = create_runner(model_key, tensor_parallel_size=tensor_parallel_size, port=port)
     all_results: List[EvalResult] = []
 
+    resume_id_fn = (lambda it: ("direct_solve", str(it.question_id))) if direct_solve \
+        else (lambda it: (str(it.student_id), str(it.question_id)))
+
     # Resume: skip already-completed (student, question) pairs
     existing_rows = []
     if output_dir:
@@ -256,7 +260,7 @@ def run_evaluation(
                 existing_rows = [json.loads(line) for line in f]
             completed = {(str(r["student_id"]), str(r["question_unittest_id"])) for r in existing_rows}
             original_count = len(items)
-            items = [it for it in items if (str(it.student_id), str(it.question_id)) not in completed]
+            items = [it for it in items if resume_id_fn(it) not in completed]
             logger.info("Resume: %d completed, %d remaining (was %d).",
                         len(completed), len(items), original_count)
 
@@ -272,6 +276,7 @@ def run_evaluation(
             n_public_map, batch_size,
             student_to_course, student_to_section, question_to_is_exam,
             persona_builder, history_summarizer, prompt_log_file,
+            direct_solve=direct_solve,
         )
         all_results.extend(chunk_results)
 
@@ -292,6 +297,7 @@ def _run_chunk(
     n_public_map, batch_size,
     student_to_course, student_to_section, question_to_is_exam,
     persona_builder, history_summarizer, prompt_log_file,
+    direct_solve=False,
 ):
     """Run the iterative attempt loop on a chunk of items."""
     # Parse test cases
@@ -325,8 +331,11 @@ def _run_chunk(
     from .summarize import RAG_SUMMARY_PROMPT
     item_max_attempts = {}
     for idx, item in enumerate(chunk_items):
-        real = getattr(item, "_real_attempts", None) or []
-        item_max_attempts[idx] = min(len(real), max_attempts)
+        if direct_solve:
+            item_max_attempts[idx] = max_attempts
+        else:
+            real = getattr(item, "_real_attempts", None) or []
+            item_max_attempts[idx] = min(len(real), max_attempts)
 
     for attempt in range(max_attempts):
         if not active:
@@ -346,7 +355,14 @@ def _run_chunk(
             item = chunk_items[idx]
 
             if attempt == 0:
-                rp = _build_initial_prompt(item, persona_builder)
+                if direct_solve:
+                    rp = build_direct_solve_prompt(
+                        question_name=item.question_name,
+                        question_text=item.question_text,
+                        question_template=item.question_template,
+                    )
+                else:
+                    rp = _build_initial_prompt(item, persona_builder)
                 prompts_for_log.append(rp)
                 if isinstance(rp, tuple):
                     sys_msg, user_msg = rp
@@ -360,6 +376,28 @@ def _run_chunk(
                 else:
                     system_prompts.append(None)
                     user_prompts.append(rp)
+                    conv_histories.append(None)
+            elif direct_solve:
+                conv = conversations.get(idx)
+                feedback_msg = _build_feedback_message(
+                    last_code[idx], last_eval[idx], last_tests[idx],
+                    history_summarizer,
+                )
+                retry_msg = (
+                    f"Your previous submission:\n```cpp\n{last_code[idx]}\n```\n\n"
+                    f"{feedback_msg}\n"
+                    "Fix your code to pass all tests."
+                )
+                if conv:
+                    conv["messages"].append({"role": "user", "content": retry_msg})
+                    prompts_for_log.append(("(multi-turn)", retry_msg))
+                    system_prompts.append(conv["system"])
+                    user_prompts.append(retry_msg)
+                    conv_histories.append(conv["messages"])
+                else:
+                    prompts_for_log.append(retry_msg)
+                    system_prompts.append(None)
+                    user_prompts.append(retry_msg)
                     conv_histories.append(None)
             else:
                 conv = conversations.get(idx)
@@ -450,7 +488,7 @@ def _run_chunk(
         actions = []
         codes = []
         for i, idx in enumerate(active):
-            action = extract_action(all_responses[i])
+            action = "Submit" if direct_solve else extract_action(all_responses[i])
             code = extract_code(all_responses[i])
             actions.append(action)
             codes.append(code)
@@ -494,9 +532,10 @@ def _run_chunk(
 
                 last_eval[idx] = ev
                 last_tests[idx] = td["test_cases"] if td else []
-                next_active.append(idx)
                 if passed:
                     n_passed += 1
+                if not (passed and direct_solve):
+                    next_active.append(idx)
             else:
                 n_prechecks += 1
                 if i in precheck_results:
