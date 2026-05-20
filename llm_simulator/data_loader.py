@@ -53,6 +53,7 @@ class EvalItem:
     question_template: str
     question_unittests: str
     examples: List[Example] = field(default_factory=list)
+    target_timestamp: Optional[str] = None  # timestamp of the target submission (for temporal filtering)
 
 
 # ── Test-case parsing (for iterative feedback) ──────────────────────────────
@@ -121,7 +122,8 @@ def _load_hf_main_data() -> pd.DataFrame:
     """Load main_data.csv from HuggingFace (for public test counts + full data)."""
     hf_dir = snapshot_download(repo_id=HF_REPO_ID, repo_type="dataset")
     return pd.read_csv(
-        os.path.join(hf_dir, "main_data.csv"), dtype={"pass": str}
+        os.path.join(hf_dir, "main_data.csv"), dtype={"pass": str},
+        on_bad_lines="skip", low_memory=False,
     )
 
 
@@ -141,6 +143,8 @@ def load_eval_items(
     max_students: Optional[int] = None,
     max_questions: Optional[int] = None,
     seed: int = 42,
+    course: Optional[str] = None,
+    cutoff_week: int = 1,
 ) -> List[EvalItem]:
     """Load evaluation items for the LLM simulator.
 
@@ -172,6 +176,7 @@ def load_eval_items(
         items = _load_trajectory(
             n_examples, max_students=max_students,
             max_questions=max_questions, seed=seed,
+            course=course, cutoff_week=cutoff_week,
         )
 
     if max_samples and len(items) > max_samples:
@@ -200,6 +205,8 @@ def _load_trajectory(
     max_students: Optional[int] = None,
     max_questions: Optional[int] = None,
     seed: int = 42,
+    course: Optional[str] = None,
+    cutoff_week: int = 1,
 ) -> List[EvalItem]:
     """Load trajectory-based items from full submission history.
 
@@ -221,24 +228,75 @@ def _load_trajectory(
     main_df = _load_hf_main_data()
     q_df = _load_hf_questions()
 
+    # Filter by course if specified
+    if course:
+        hf_dir = snapshot_download(repo_id=HF_REPO_ID, repo_type="dataset")
+        course_df = pd.read_csv(os.path.join(hf_dir, "course_infos.csv"))
+        course_ids = course_df[course_df["course_name"] == course]["course_id"].tolist()
+        if not course_ids:
+            available = course_df["course_name"].tolist()
+            raise ValueError(f"Course '{course}' not found. Available: {available}")
+        main_df = main_df[main_df["course_id"].isin(course_ids)]
+        logger.info("Filtered to course '%s' (course_id=%s): %d rows.",
+                     course, course_ids, len(main_df))
+
     # Keep Prechecked + Submit responses, merge question info
     subs = main_df.dropna(subset=["response"]).copy()
     subs = subs[subs["response_type"].isin(["Prechecked", "Submit"])].sort_values("timestamp")
 
     q_cols = [
         "question_id", "question_name", "question_text",
-        "question_template", "question_unittests",
+        "question_template", "question_unittests", "week",
     ]
+    # Deduplicate question_infos: prefer rows with unit tests
+    q_dedup = q_df[q_cols].sort_values(
+        "question_unittests", na_position="first"
+    ).drop_duplicates(subset=["question_id"], keep="last")
     merged = subs.merge(
-        q_df[q_cols],
+        q_dedup,
         left_on="question_unittest_id",
         right_on="question_id",
         how="inner",
     )
 
-    # Sample students and questions independently (unbiased)
+    # Use the same temporal split as RSSM: qid_to_week from the unified data loader
+    # Target questions are from weeks > cutoff_week, context from weeks <= cutoff_week
+    try:
+        from dynamic_models.temporal_eval.data_loader import load_unified_data as _load_unified
+        unified = _load_unified(course) if course else None
+    except Exception:
+        unified = None
+
+    if unified is not None and hasattr(unified, "qid_to_week"):
+        qid_to_week = unified.qid_to_week
+        target_qids = set(
+            qid for qid, week in qid_to_week.items() if week > cutoff_week
+        )
+        logger.info("Using qid_to_week from temporal eval: %d questions in weeks > %d.",
+                     len(target_qids), cutoff_week)
+    else:
+        # Fallback to CSV week column
+        target_qids = set(
+            merged.loc[
+                merged["week"].notna() & (merged["week"] > cutoff_week),
+                "question_unittest_id",
+            ].unique()
+        )
+        logger.info("Using CSV week column: %d questions in weeks > %d.",
+                     len(target_qids), cutoff_week)
+
+    gradeable = set(
+        merged.loc[
+            merged["question_unittests"].notna()
+            & (merged["question_unittests"].astype(str) != "nan"),
+            "question_unittest_id",
+        ].unique()
+    ) & target_qids
+
     all_students = merged["student_id"].unique()
-    all_questions = merged["question_unittest_id"].unique()
+    all_questions = pd.array([q for q in merged["question_unittest_id"].unique() if q in gradeable])
+    logger.info("%d/%d questions are gradeable targets (week > %d).",
+                len(all_questions), merged["question_unittest_id"].nunique(), cutoff_week)
 
     if max_students and max_students < len(all_students):
         sampled_students = (
@@ -249,25 +307,29 @@ def _load_trajectory(
     else:
         sampled_students = all_students
 
-    if max_questions and max_questions < len(all_questions):
-        sampled_questions = (
-            pd.Series(all_questions)
-            .sample(n=max_questions, random_state=seed + 1)
-            .values
-        )
-    else:
-        sampled_questions = all_questions
-
-    logger.info(
-        "Sampled %d students, %d questions",
-        len(sampled_students), len(sampled_questions),
-    )
+    logger.info("Sampled %d students.", len(sampled_students))
 
     # Keep full history for sampled students (needed for trajectory context)
     student_data = merged[merged["student_id"].isin(sampled_students)].copy()
     student_data = student_data.sort_values(["student_id", "timestamp"])
 
-    sampled_q_set = set(sampled_questions)
+    # Per-student question sampling: for each student, sample max_questions
+    # from the gradeable questions THEY attempted
+    import random
+    rng = random.Random(seed + 1)
+    sampled_q_per_student: Dict[str, set] = {}
+    for sid in sampled_students:
+        student_qs = [
+            q for q in student_data[student_data["student_id"] == sid]["question_unittest_id"].unique()
+            if q in gradeable
+        ]
+        if max_questions and max_questions < len(student_qs):
+            sampled_q_per_student[sid] = set(rng.sample(student_qs, max_questions))
+        else:
+            sampled_q_per_student[sid] = set(student_qs)
+
+    total_pairs = sum(len(qs) for qs in sampled_q_per_student.values())
+    logger.info("Sampled %d total (student, question) pairs.", total_pairs)
 
     # Pre-group by student for fast lookup
     logger.info("Building trajectory items for %d students…", len(sampled_students))
@@ -286,11 +348,12 @@ def _load_trajectory(
             qid = r["question_unittest_id"]
             q_rows.setdefault(qid, []).append(r)
 
-        # Find target questions (last submission per sampled question)
+        # Find target questions (last submission per sampled question for this student)
+        student_q_set = sampled_q_per_student.get(student_id, set())
         targets: Dict[str, dict] = {}
         for r in rows:
             qid = r["question_unittest_id"]
-            if qid in sampled_q_set:
+            if qid in student_q_set:
                 targets[qid] = r  # last one wins (rows sorted by timestamp)
 
         for target_qid, target in targets.items():
@@ -342,6 +405,7 @@ def _load_trajectory(
                     target.get("question_unittests", "")
                 ),
                 examples=examples,
+                target_timestamp=str(target.get("timestamp", "")),
             ))
 
         n_processed += 1
