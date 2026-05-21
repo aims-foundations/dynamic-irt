@@ -31,6 +31,10 @@ JSONL_PATH = os.path.join(
     os.path.dirname(__file__), "..",
     "results", "llm_student_eval", "dsa_hk231", "claude_attempts10.jsonl",
 )
+DIRECT_SOLVE_PATH = os.path.join(
+    os.path.dirname(__file__), "..",
+    "results", "llm_student_eval", "dsa_hk231", "direct_solve", "opus_attempts10.jsonl",
+)
 COURSE = "dsa_hk231"
 OUT_DIR = os.path.join(
     os.path.dirname(__file__), "..", "results", "llm_predictor", "student_split",
@@ -42,6 +46,19 @@ def _pass_fraction(s):
     if not s or s == "nan":
         return np.nan
     return sum(c == "1" for c in s) / len(s) if len(s) > 0 else np.nan
+
+
+def load_direct_solve_scores():
+    with open(DIRECT_SOLVE_PATH) as f:
+        rows = [json.loads(l) for l in f]
+    df = pd.DataFrame(rows)
+    df["attempt_id"] = pd.to_numeric(df["attempt_id"], errors="coerce")
+    first = df[df["attempt_id"] == 0]
+    scores = {}
+    for _, row in first.iterrows():
+        scores[str(row["question_unittest_id"])] = _pass_fraction(row["pass"])
+    print(f"  Loaded direct-solve first-attempt scores for {len(scores)} questions")
+    return scores
 
 
 def load_and_align():
@@ -117,7 +134,7 @@ def load_and_align():
     return merged
 
 
-def fig_decomposition_test(merged):
+def fig_decomposition_test(merged, direct_scores=None):
     m = merged.copy()
 
     # Center by question (remove difficulty signal)
@@ -132,8 +149,14 @@ def fig_decomposition_test(merged):
     m["y_pred_cs"] = m["y_pred"] - s_mean_pred
     m["y_true_cs"] = m["y_true"] - s_mean_true
 
-    # Per-student tau: original vs centered-by-question
-    orig_s_taus, centered_s_taus = [], []
+    # Center by direct-solve score (remove LLM base ability signal)
+    if direct_scores:
+        m["direct_score"] = m["question_unittest_id"].map(direct_scores)
+        m["y_pred_cd"] = m["y_pred"] - m["direct_score"]
+        m["y_true_cd"] = m["y_true"] - m["direct_score"]
+
+    # Per-student tau: original vs centered-by-question vs centered-by-direct
+    orig_s_taus, centered_s_taus, direct_s_taus = [], [], []
     for _, grp in m.groupby("student_id"):
         if len(grp) < 5 or grp["y_pred"].std() == 0 or grp["y_true"].std() == 0:
             continue
@@ -144,6 +167,10 @@ def fig_decomposition_test(merged):
             tau_c, _ = kendalltau(grp["y_pred_cq"], grp["y_true_cq"])
             if not np.isnan(tau_c):
                 centered_s_taus.append(tau_c)
+        if direct_scores and grp["y_pred_cd"].std() > 0 and grp["y_true_cd"].std() > 0:
+            tau_d, _ = kendalltau(grp["y_pred_cd"], grp["y_true_cd"])
+            if not np.isnan(tau_d):
+                direct_s_taus.append(tau_d)
 
     # Per-question tau: original vs centered-by-student
     orig_q_taus, centered_q_taus = [], []
@@ -160,11 +187,13 @@ def fig_decomposition_test(merged):
 
     orig_s_taus = np.array(orig_s_taus)
     centered_s_taus = np.array(centered_s_taus)
+    direct_s_taus = np.array(direct_s_taus)
     orig_q_taus = np.array(orig_q_taus)
     centered_q_taus = np.array(centered_q_taus)
 
-    # Per-student tau figure (2x1)
-    fig, axes = plt.subplots(2, 1, figsize=(8, 10))
+    # Per-student tau figure
+    n_rows = 3 if len(direct_s_taus) > 0 else 2
+    fig, axes = plt.subplots(n_rows, 1, figsize=(8, 5 * n_rows))
 
     ax = axes[0]
     ax.hist(orig_s_taus, bins=18, color="#6A9B59", alpha=0.8, edgecolor="white")
@@ -178,7 +207,7 @@ def fig_decomposition_test(merged):
     ax.hist(orig_s_taus, bins=18, alpha=0.6, color="#6A9B59", edgecolor="white",
             label="Original")
     ax.hist(centered_s_taus, bins=18, alpha=0.6, color="#C44E52", edgecolor="white",
-            label="Centered")
+            label="Centered by question difficulty")
     ax.axvline(0, color="black", linestyle="--", linewidth=1, alpha=0.5)
     ax.set_xlabel(r"Per-Student Kendall $\tau$", fontsize=14)
     ax.set_ylabel("Number of Students", fontsize=14)
@@ -186,10 +215,24 @@ def fig_decomposition_test(merged):
     ax.tick_params(labelsize=12)
     ax.legend(fontsize=12)
 
-    all_s = np.concatenate([orig_s_taus, centered_s_taus])
+    if n_rows == 3:
+        ax = axes[2]
+        ax.hist(orig_s_taus, bins=18, alpha=0.6, color="#6A9B59", edgecolor="white",
+                label="Original")
+        ax.hist(direct_s_taus, bins=18, alpha=0.6, color="#4C72B0", edgecolor="white",
+                label="Centered by LLM direct-solve")
+        ax.axvline(0, color="black", linestyle="--", linewidth=1, alpha=0.5)
+        ax.set_xlabel(r"Per-Student Kendall $\tau$", fontsize=14)
+        ax.set_ylabel("Number of Students", fontsize=14)
+        ax.set_title("Remove LLM Base Ability (Direct Solve)", fontsize=16)
+        ax.tick_params(labelsize=12)
+        ax.legend(fontsize=12)
+
+    all_s = np.concatenate([orig_s_taus, centered_s_taus] +
+                           ([direct_s_taus] if len(direct_s_taus) > 0 else []))
     s_lim = (min(all_s.min(), -0.05) - 0.05, max(all_s.max(), 0.05) + 0.05)
-    axes[0].set_xlim(s_lim)
-    axes[1].set_xlim(s_lim)
+    for ax in axes:
+        ax.set_xlim(s_lim)
 
     fig.tight_layout()
     path = os.path.join(OUT_DIR, "decomposition_test.png")
@@ -244,9 +287,17 @@ def fig_decomposition_test(merged):
     }
 
     print(f"  Per-student tau: original={orig_s_taus.mean():.4f} -> "
-          f"centered={centered_s_taus.mean():.4f} (drop={s_drop:.0f}%)")
+          f"centered_by_question={centered_s_taus.mean():.4f} (drop={s_drop:.0f}%)")
     print(f"  Per-question tau: original={orig_q_taus.mean():.4f} -> "
-          f"centered={centered_q_taus.mean():.4f} (drop={q_drop:.0f}%)")
+          f"centered_by_student={centered_q_taus.mean():.4f} (drop={q_drop:.0f}%)")
+
+    if len(direct_s_taus) > 0:
+        d_drop = (orig_s_taus.mean() - direct_s_taus.mean()) / max(abs(orig_s_taus.mean()), 1e-9) * 100
+        decomp["direct_centered_student_tau_mean"] = direct_s_taus.mean()
+        decomp["drop_pct_direct"] = d_drop
+        print(f"  Per-student tau: original={orig_s_taus.mean():.4f} -> "
+              f"centered_by_direct_solve={direct_s_taus.mean():.4f} (drop={d_drop:.0f}%)")
+
     return decomp
 
 
@@ -256,8 +307,13 @@ def main():
     print("Loading and aligning LLM predictions with ground truth...")
     merged = load_and_align()
 
+    direct_scores = None
+    if os.path.exists(DIRECT_SOLVE_PATH):
+        print("\nLoading direct-solve scores...")
+        direct_scores = load_direct_solve_scores()
+
     print("\nDecomposition test...")
-    decomp = fig_decomposition_test(merged)
+    decomp = fig_decomposition_test(merged, direct_scores=direct_scores)
 
     decomp_df = pd.DataFrame([decomp])
     path = os.path.join(OUT_DIR, "decomposition_summary.csv")
