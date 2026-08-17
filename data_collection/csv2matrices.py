@@ -88,8 +88,14 @@ def load_csv_data(course_name):
 
 def build_matrices(main_data, question_infos, course_name, device):
     """Build 3D matrices from CSV data."""
-    # Filter question_infos to this course
-    if "course_id" in main_data.columns and "course_id" in question_infos.columns:
+    # Filter question_infos to this course (only valid for single-course data)
+    single_course = (
+        main_data["course_id"].nunique() == 1
+        if "course_id" in main_data.columns else True
+    )
+    if not single_course:
+        print("WARNING: main_data spans multiple courses; skipping question_infos course filter and derived-week fallback (per-course metadata requires a single course).")
+    if single_course and "course_id" in main_data.columns and "course_id" in question_infos.columns:
         course_id = int(main_data["course_id"].iloc[0])
         question_infos = question_infos[question_infos["course_id"].astype(int) == course_id]
 
@@ -137,7 +143,9 @@ def build_matrices(main_data, question_infos, course_name, device):
     is_exam_matrix = np.full((n_students, n_items, max_attempts), -1, dtype=np.int8)
 
     # Sort by student, question, timestamp to get attempt order
-    main_data = main_data.sort_values(["student_id", "question_unittest_id", "timestamp"])
+    main_data = main_data.sort_values(
+        ["student_id", "question_unittest_id", "timestamp"], kind="stable"
+    )
 
     # Track attempt number per student-question pair
     main_data["attempt_num"] = main_data.groupby(["student_id", "question_unittest_id"]).cumcount()
@@ -200,10 +208,10 @@ def build_matrices(main_data, question_infos, course_name, device):
                 break
 
     # Derive weeks from timestamps for questions missing from question_infos
-    qi_qids = set(question_infos["question_id"].values) if len(question_infos) > 0 else set()
+    qi_qids = set(question_infos["question_id"].values)
     missing_qids = [qid for qid in question_ids if qid not in qi_qids]
     derived_weeks = {}
-    if missing_qids:
+    if missing_qids and single_course:
         ts_data = main_data[["question_unittest_id", "timestamp"]].copy()
         ts_data["ts"] = pd.to_datetime(ts_data["timestamp"], format="%d/%m/%y, %H:%M:%S", errors="coerce")
         first_ts = ts_data.dropna(subset=["ts"]).groupby("question_unittest_id")["ts"].min()
@@ -212,6 +220,9 @@ def build_matrices(main_data, question_infos, course_name, device):
             for qid in missing_qids:
                 if qid in first_ts.index:
                     derived_weeks[qid] = (first_ts[qid] - course_start).days // 7 + 1
+        print(f"Derived weeks for {len(derived_weeks)}/{len(missing_qids)} qids "
+              f"missing from question_infos; {len(missing_qids) - len(derived_weeks)} "
+              f"fall back to week 0 (dropped from train/test splits downstream)")
 
     # Build student info
     student_info = [{"student_id": sid} for sid in student_ids]
