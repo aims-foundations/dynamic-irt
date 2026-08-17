@@ -1,12 +1,14 @@
 """Student-based evaluation: calibrate on train students, score test students.
 
 Quality-filters students/questions across all weeks, then splits students
-70/30. Train students calibrate item parameters; test students' weeks 1-3
-data estimates ability; predictions are on test students' weeks 4-6.
+55/15/30 into train/val/test, with the validation students driving
+checkpoint selection. Train students calibrate item parameters; test
+students' weeks 1-3 data estimates ability; predictions are on test
+students' weeks 4-6.
 
 Usage:
     python -m dynamic_models.temporal_eval.run_student_eval
-    python -m dynamic_models.temporal_eval.run_student_eval --models IRT BKT DKT
+    python -m dynamic_models.temporal_eval.run_student_eval --models IRT BKT DKT CodeDKT RSSM
     python -m dynamic_models.temporal_eval.run_student_eval --courses dsa_hk231 dsa_hk221 pf_hk232 pf_hk222 --plot_losses
 """
 
@@ -22,6 +24,7 @@ sys.path.insert(0, REPO_ROOT)
 import numpy as np
 import pandas as pd
 
+from dynamic_models.temporal_eval.data_filter import DEFAULT_FILTER
 from dynamic_models.temporal_eval.data_loader import load_student_split_data
 from dynamic_models.temporal_eval.harness import get_adapter_registry
 from dynamic_models.temporal_eval.metrics import compute_metrics
@@ -35,6 +38,10 @@ def run_student_evaluation(
     max_attempts: int = 10,
     test_frac: float = 0.3,
     train_week_cutoff: int = 3,
+    min_pass_rate: float = 0.10,
+    max_pass_rate: float = 0.90,
+    min_question_coverage: float = 0.25,
+    adapter_kwargs: dict = None,
 ):
     data, split = load_student_split_data(
         course_name=course_name,
@@ -42,6 +49,9 @@ def run_student_evaluation(
         test_frac=test_frac,
         train_week_cutoff=train_week_cutoff,
         seed=seed,
+        min_pass_rate=min_pass_rate,
+        max_pass_rate=max_pass_rate,
+        min_question_coverage=min_question_coverage,
     )
 
     # Build adapters
@@ -61,6 +71,7 @@ def run_student_evaluation(
     os.makedirs(output_dir, exist_ok=True)
     results_rows = []
     predictions = {}
+    failed = []
 
     for model_name, adapter in adapters.items():
         print(f"\n{'=' * 60}")
@@ -70,7 +81,8 @@ def run_student_evaluation(
         t0 = time.time()
         try:
             prediction = adapter.fit_and_predict_student_split(
-                data, split, seed=seed
+                data, split, seed=seed,
+                **((adapter_kwargs or {}).get(model_name, {}))
             )
             metrics = compute_metrics(prediction.y_true, prediction.y_pred_prob)
             runtime = time.time() - t0
@@ -79,7 +91,9 @@ def run_student_evaluation(
 
             print(f"  AUC={metrics.auc:.4f}  "
                   f"Acc={metrics.accuracy:.4f}  "
+                  f"BalAcc={metrics.balanced_accuracy:.4f}  "
                   f"F1={metrics.f1:.4f}  "
+                  f"Brier={metrics.brier:.4f}  "
                   f"LL={metrics.log_likelihood:.4f}  "
                   f"RMSE={metrics.rmse:.4f}  "
                   f"N={metrics.n_test_obs}  "
@@ -102,6 +116,7 @@ def run_student_evaluation(
             print(f"  ERROR: {e}")
             import traceback
             traceback.print_exc()
+            failed.append(model_name)
 
         # Save predictions
         if model_name in predictions:
@@ -109,6 +124,10 @@ def run_student_evaluation(
             pred_path = os.path.join(output_dir, f"{model_name}_student_pred.pkl")
             with open(pred_path, "wb") as f:
                 pickle.dump(pred, f)
+
+    if failed:
+        print(f"\n{'!' * 60}\nMODELS FAILED: {', '.join(failed)}\n{'!' * 60}",
+              file=sys.stderr)
 
     results_df = pd.DataFrame(results_rows)
     if len(results_df) > 0:
@@ -156,7 +175,12 @@ def plot_loss_curves(all_losses, output_dir):
 
         for i, (course, losses) in enumerate(model_data.items()):
             ax = axes[i]
+            losses = np.asarray(losses, dtype=float)
             epochs = np.arange(1, len(losses) + 1)
+            if len(losses) >= 15:
+                # 5-epoch moving average
+                losses = np.convolve(losses, np.ones(5) / 5, mode="valid")
+                epochs = epochs[2:2 + len(losses)]
             ax.plot(epochs, losses, linewidth=0.8)
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Training Loss")
@@ -182,11 +206,20 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--plot_losses", action="store_true")
+    parser.add_argument("--min_pass_rate", type=float,
+                        default=DEFAULT_FILTER.min_pass_rate)
+    parser.add_argument("--max_pass_rate", type=float,
+                        default=DEFAULT_FILTER.max_pass_rate)
+    parser.add_argument("--min_question_coverage", type=float,
+                        default=DEFAULT_FILTER.min_question_coverage)
+    parser.add_argument("--max_attempts", type=int,
+                        default=DEFAULT_FILTER.max_attempts)
     args = parser.parse_args()
 
     courses = args.courses or [args.course_name]
 
     all_losses = {}
+    missing_models = []
     for course in courses:
         output_dir = args.output_dir or os.path.join(
             REPO_ROOT, "results", "student_eval", course
@@ -197,6 +230,15 @@ def main():
             models=args.models,
             seed=args.seed,
             output_dir=output_dir,
+            max_attempts=args.max_attempts,
+            min_pass_rate=args.min_pass_rate,
+            max_pass_rate=args.max_pass_rate,
+            min_question_coverage=args.min_question_coverage,
+        )
+
+        requested = args.models or list(get_adapter_registry().keys())
+        missing_models.extend(
+            f"{course}/{m}" for m in requested if m not in predictions
         )
 
         course_losses = {}
@@ -208,6 +250,11 @@ def main():
     if args.plot_losses and all_losses:
         loss_dir = os.path.join(REPO_ROOT, "results", "loss_curves")
         plot_loss_curves(all_losses, loss_dir)
+
+    if missing_models:
+        print(f"MODELS MISSING FROM RESULTS: {', '.join(missing_models)}",
+              file=sys.stderr)
+        sys.exit(1)
 
     print("\nDone!")
 
