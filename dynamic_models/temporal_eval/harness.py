@@ -21,12 +21,14 @@ def get_adapter_registry() -> Dict[str, ModelAdapter]:
         CIRTAdapter,
         DKTAdapter,
         IRTAdapter,
+        RSSMAdapter,
     )
     return {
         "BKT": BKTAdapter(),
         "CIRT": CIRTAdapter(),
         "DKT": DKTAdapter(),
         "IRT": IRTAdapter(),
+        "RSSM": RSSMAdapter(),
     }
 
 
