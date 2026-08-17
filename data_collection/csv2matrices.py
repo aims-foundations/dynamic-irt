@@ -88,6 +88,11 @@ def load_csv_data(course_name):
 
 def build_matrices(main_data, question_infos, course_name, device):
     """Build 3D matrices from CSV data."""
+    # Filter question_infos to this course
+    if "course_id" in main_data.columns and "course_id" in question_infos.columns:
+        course_id = int(main_data["course_id"].iloc[0])
+        question_infos = question_infos[question_infos["course_id"].astype(int) == course_id]
+
     # Create mappings
     student_ids = main_data["student_id"].unique()
     student_to_idx = {sid: idx for idx, sid in enumerate(student_ids)}
@@ -194,6 +199,20 @@ def build_matrices(main_data, question_infos, course_name, device):
                 qidx_list.append(question_to_idx[qid])
                 break
 
+    # Derive weeks from timestamps for questions missing from question_infos
+    qi_qids = set(question_infos["question_id"].values) if len(question_infos) > 0 else set()
+    missing_qids = [qid for qid in question_ids if qid not in qi_qids]
+    derived_weeks = {}
+    if missing_qids:
+        ts_data = main_data[["question_unittest_id", "timestamp"]].copy()
+        ts_data["ts"] = pd.to_datetime(ts_data["timestamp"], format="%d/%m/%y, %H:%M:%S", errors="coerce")
+        first_ts = ts_data.dropna(subset=["ts"]).groupby("question_unittest_id")["ts"].min()
+        if len(first_ts) > 0:
+            course_start = first_ts.min()
+            for qid in missing_qids:
+                if qid in first_ts.index:
+                    derived_weeks[qid] = (first_ts[qid] - course_start).days // 7 + 1
+
     # Build student info
     student_info = [{"student_id": sid} for sid in student_ids]
 
@@ -205,6 +224,7 @@ def build_matrices(main_data, question_infos, course_name, device):
         if len(q_row) > 0:
             question_info_list.append({
                 "qidx": qidx,
+                "question_unittest_id": int(qid),
                 "qname": q_row["question_name"].values[0] if "question_name" in q_row.columns else str(qid),
                 "week": q_row["week"].values[0] if "week" in q_row.columns else 0,
                 "topic": q_row["topic"].values[0] if "topic" in q_row.columns else "",
@@ -212,8 +232,9 @@ def build_matrices(main_data, question_infos, course_name, device):
         else:
             question_info_list.append({
                 "qidx": qidx,
+                "question_unittest_id": int(qid),
                 "qname": str(qid),
-                "week": 0,
+                "week": derived_weeks.get(qid, 0),
                 "topic": "",
             })
 
