@@ -1,13 +1,13 @@
 """Unified prompt builder for LLM student simulation.
 
-Replaces the old 4-scenario PromptGenerator + iterative prompt functions.
-One scenario ("imitate this student"), parameterized by:
-    - examples: None → zero-shot, List[dict] → few-shot
-    - feedback: None → first attempt, dict → retry with test results
+One scenario ("imitate this student"): build_prompt assembles a structured
+system + user message pair from the persona, self-trajectory summaries, and
+question metadata.
+Also provides extract_code / extract_action for parsing LLM responses.
 """
 
 import re
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple
 
 # ── Code extraction ──────────────────────────────────────────────────────────
 
@@ -107,42 +107,39 @@ def build_prompt(
     question_name: str,
     question_text: str,
     question_template: str,
-    feedback: Optional[Dict] = None,
     persona_text: Optional[str] = None,
     self_summaries: Optional[List[str]] = None,
     question_metadata: Optional[str] = None,
     question_summary: Optional[str] = None,
-    feedback_summary: Optional[str] = None,
-) -> Union[str, Tuple[str, str]]:
+) -> Tuple[str, str]:
     """Build a prompt for LLM student simulation.
 
-    Returns (system_message, user_message) when persona_text + summaries
-    are provided. Falls back to a plain prompt string otherwise.
+    Returns a (system_message, user_message) pair assembled from the
+    persona, self-trajectory summaries, and question metadata (each
+    section is included only when provided).
     """
-    # ── Student split mode: structured system + user messages ──
-    if persona_text and self_summaries:
+    # == SYSTEM MESSAGE ==
+    sys_parts = [
+        # Task framing
+        "You are predicting what a specific university student would submit "
+        "for a C++ programming assignment. Your goal is to mimic the full "
+        "submission history of this student. If you believe the student "
+        "would not pass on the first attempt, produce code with errors "
+        "consistent with their coding abilities and profile. Continue "
+        "producing realistic attempts until you believe the student would "
+        "solve the question. Study the student profile and prior work "
+        "to calibrate your response.",
 
-        # == SYSTEM MESSAGE ==
-        sys_parts = [
-            # Task framing
-            "You are predicting what a specific university student would submit "
-            "for a C++ programming assignment. Your goal is to mimic the full "
-            "submission history of this student. If you believe the student "
-            "would not pass on the first attempt, produce code with errors "
-            "consistent with their coding abilities and profile. Continue "
-            "producing realistic attempts until you believe the student would "
-            "solve the question. Study the student profile and prior work "
-            "to calibrate your response.",
+        # Question description (short — full text + template are in user message)
+        f"\n=== QUESTION: {question_name} ===\n",
+    ]
+    if question_summary:
+        sys_parts.append(question_summary)
+    if question_metadata:
+        sys_parts.append(question_metadata)
 
-            # Question description (short — full text + template are in user message)
-            f"\n=== QUESTION: {question_name} ===\n",
-        ]
-        if question_summary:
-            sys_parts.append(question_summary)
-        if question_metadata:
-            sys_parts.append(question_metadata)
-
-        # Student identity (strip the old intro line from persona)
+    # Student identity (strip the old intro line from persona)
+    if persona_text:
         persona_lines = persona_text.split("\n")
         identity_start = next(
             (i for i, l in enumerate(persona_lines) if "STUDENT IDENTITY" in l), None
@@ -152,94 +149,35 @@ def build_prompt(
         else:
             sys_parts.append("\n" + persona_text)
 
-        system_message = "\n".join(sys_parts)
+    system_message = "\n".join(sys_parts)
 
-        # == USER MESSAGE ==
-        parts: List[str] = []
-
-        # Self approaches (with question name + summary)
-        if self_summaries:
-            parts.append(
-                "=== How This Student Approached Similar Problems ===\n"
-            )
-            for i, summary in enumerate(self_summaries, 1):
-                parts.append(f"{i}. {summary}\n")
-
-        # Format demonstration
-        parts.append(
-            "=== Submission Format ===\n"
-            "You can either [Precheck] (run public tests only, no grade penalty) "
-            "or [Submit] (final submission, graded against all tests).\n"
-            "Example:\n"
-            "[Precheck]\n"
-            "```cpp\n"
-            "// your implementation here\n"
-            "```\n"
-        )
-
-        # Question text + template
-        parts.append(f"=== Question ===\n{question_text}\n")
-        parts.append(f"=== Code Template ===\n{question_template}\n")
-
-        # Feedback (accumulated history if available, otherwise single)
-        if feedback_summary and feedback:
-            parts.append(
-                f"\n=== Previous Attempt ===\n"
-                f"```cpp\n{feedback['previous_code']}\n```\n\n"
-                f"Feedback: {feedback_summary}\n\n"
-                "Edit your previous code to fix these issues. "
-                "Make the smallest change necessary — fix only the buggy "
-                "lines and keep everything else identical.\n"
-            )
-        elif feedback:
-            parts.append(
-                f"\n=== Previous Attempt ===\n"
-                f"```cpp\n{feedback['previous_code']}\n```\n\n"
-                f"=== Feedback from Visible Tests ===\n"
-                "Your previous submission failed the following visible test cases:\n"
-            )
-            for i, ft in enumerate(feedback["failed_tests"], start=1):
-                actual = ft["actual"] or "(no output — likely a compile or runtime error)"
-                parts.append(
-                    f"Test {i}:\n"
-                    f"  Test input:  {ft['input']}\n"
-                    f"  STD input:   {ft['std_in']}\n"
-                    f"  Expected:    {ft['expected']}\n"
-                    f"  Got:         {actual}\n"
-                )
-            parts.append(
-                "\nEdit your previous code to fix the failing tests. "
-                "Make the smallest change necessary — fix only the buggy "
-                "lines and keep everything else identical. "
-                "Do NOT rewrite the solution from scratch.\n"
-            )
-
-        # Instructions at the very end
-        parts.append(f"\n{_CODE_INSTRUCTIONS}")
-        return (system_message, "\n".join(parts))
-
-    # No student split summaries and no persona — plain prompt
+    # == USER MESSAGE ==
     parts: List[str] = []
-    parts.append(
-        f"Question: {question_name} — {question_text}\n\n"
-        f"Template:\n{question_template}\n"
-    )
-    if feedback:
+
+    # Self approaches (with question name + summary)
+    if self_summaries:
         parts.append(
-            f"\n=== Previous Attempt ===\n"
-            f"```cpp\n{feedback['previous_code']}\n```\n\n"
+            "=== How This Student Approached Similar Problems ===\n"
         )
-        if feedback_summary:
-            parts.append(f"Feedback: {feedback_summary}\n")
-        else:
-            parts.append("=== Feedback from Visible Tests ===\n")
-            for i, ft in enumerate(feedback["failed_tests"], start=1):
-                actual = ft["actual"] or "(no output)"
-                parts.append(
-                    f"Test {i}:\n"
-                    f"  Test input:  {ft['input']}\n"
-                    f"  Expected:    {ft['expected']}\n"
-                    f"  Got:         {actual}\n"
-                )
+        for i, summary in enumerate(self_summaries, 1):
+            parts.append(f"{i}. {summary}\n")
+
+    # Format demonstration
+    parts.append(
+        "=== Submission Format ===\n"
+        "You can either [Precheck] (run public tests only, no grade penalty) "
+        "or [Submit] (final submission, graded against all tests).\n"
+        "Example:\n"
+        "[Precheck]\n"
+        "```cpp\n"
+        "// your implementation here\n"
+        "```\n"
+    )
+
+    # Question text + template
+    parts.append(f"=== Question ===\n{question_text}\n")
+    parts.append(f"=== Code Template ===\n{question_template}\n")
+
+    # Instructions at the very end
     parts.append(f"\n{_CODE_INSTRUCTIONS}")
-    return "\n".join(parts)
+    return (system_message, "\n".join(parts))
