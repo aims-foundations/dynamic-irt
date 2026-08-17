@@ -29,15 +29,6 @@ SELF_SUMMARY_PROMPT = (
     "Do not reproduce any code."
 )
 
-FEEDBACK_SUMMARY_PROMPT = (
-    "Here are test case results from running a student's code submission. "
-    "Condense the failing test cases into a compact log format. "
-    "For each failed test, state: the test input, the expected output, "
-    "and the actual output the code produced. "
-    "Output only the factual test results as a log. "
-    "Do not interpret, analyze, or explain the results."
-)
-
 QUESTION_SUMMARY_PROMPT = (
     "Summarize this C++ programming problem in one sentence. "
     "Focus on: what the student must implement and the key data structure or algorithm involved. "
@@ -122,6 +113,7 @@ class HistorySummarizer:
             lines = [l for l in lines if not l.startswith("#")]
             return "\n".join(lines).strip()
 
+        n_failed = 0
         with ThreadPoolExecutor(max_workers=min(max_workers, len(uncached))) as pool:
             futures = {pool.submit(_single_call, prompt): (i, prompt) for i, prompt in uncached}
             for future in as_completed(futures):
@@ -134,48 +126,12 @@ class HistorySummarizer:
                 except Exception as e:
                     logger.error("Haiku call failed: %s", e)
                     results[i] = ""
+                    n_failed += 1
+
+        if n_failed:
+            logger.warning("Haiku batch: %d/%d calls failed (empty summaries)",
+                           n_failed, len(uncached))
 
         self._save_cache()
         return results
-
-    def summarize_self_trajectory(self, traj, question_name: str = "") -> str:
-        """Summarize the test student's own trajectory on a prior question.
-
-        Args:
-            traj: SelfTrajectory dataclass from rag.py
-            question_name: Overrides traj.question_name if provided
-        """
-        name = question_name or traj.question_name
-        attempts_block = []
-        for i, a in enumerate(traj.attempts, 1):
-            rtype = "Precheck" if a["response_type"] == "Prechecked" else "Submit"
-            attempts_block.append(
-                f"Attempt {i} [{rtype}] result: {a['pass_pattern']}\n{a['response']}"
-            )
-
-        prompt = (
-            f"{SELF_SUMMARY_PROMPT}\n\n"
-            f"Problem: {name}\n\n"
-            + "\n\n".join(attempts_block)
-        )
-        return self._call_llm(prompt)
-
-    def summarize_question(self, question_text: str, question_name: str = "") -> str:
-        """Summarize a programming problem into one sentence."""
-        prompt = f"{QUESTION_SUMMARY_PROMPT}\n\nProblem: {question_name}\n{question_text[:1000]}"
-        return self._call_llm(prompt)
-
-    def summarize_feedback(self, previous_code: str, failed_tests: list) -> str:
-        """Condense failed test cases into a compact log. No code is sent to Haiku."""
-        test_lines = []
-        for i, t in enumerate(failed_tests[:5], 1):
-            test_lines.append(
-                f"Test {i}:\n"
-                f"  Input: {(t.get('input') or '')[:300]}\n"
-                f"  Expected: {(t.get('expected') or '')[:300]}\n"
-                f"  Got: {(t.get('actual') or '(no output)')[:300]}"
-            )
-
-        prompt = f"{FEEDBACK_SUMMARY_PROMPT}\n\n" + "\n\n".join(test_lines)
-        return self._call_llm(prompt)
 

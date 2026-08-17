@@ -1,19 +1,19 @@
 """Data structures, loading, and utilities for LLM student simulation.
 
-Defines EvalItem, Example dataclasses, test-case parsing, and the
+Defines the EvalItem dataclass, test-case parsing, and the
 student-split data loader that bridges the psychometric evaluation
 framework to LLM eval items.
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from dynamic_models.temporal_eval.data_loader import UnifiedData, load_student_split_data
+from dynamic_models.temporal_eval.data_loader import UnifiedData
 from dynamic_models.temporal_eval.student_split import StudentSplit
 
 logger = logging.getLogger(__name__)
@@ -25,17 +25,6 @@ HF_REPO_ID = "CodeInsightTeam/code_insights_csv"
 
 
 @dataclass
-class Example:
-    """An in-context example from a student's submission history."""
-    question_name: str
-    question_text: str
-    question_template: str
-    response: str
-    response_type: str = "Submit"      # "Prechecked" or "Submit"
-    pass_pattern: str = ""             # e.g. "1101" — test results after this attempt
-
-
-@dataclass
 class EvalItem:
     """One evaluation item: a (student, question) pair ready for prompting."""
     question_id: str
@@ -44,8 +33,6 @@ class EvalItem:
     question_text: str
     question_template: str
     question_unittests: str
-    examples: List[Example] = field(default_factory=list)
-    target_timestamp: Optional[str] = None  # timestamp of the target submission (for temporal filtering)
 
 
 # ── Test-case parsing (for iterative feedback) ──────────────────────────────
@@ -71,29 +58,6 @@ def parse_test_cases(unittests_str: str) -> List[dict]:
             "output": body[i_output + 7:].strip(),
         })
     return test_cases
-
-
-def infer_public_test_counts(main_df: pd.DataFrame) -> Dict[str, int]:
-    """Infer N_public per question from "Prechecked" submission pass-string lengths.
-
-    Students on the online judge run public tests via "Precheck", so
-    len(pass) for those rows = N_public for that question.  We take the mode
-    per question as the canonical N_public.
-
-    Returns {question_unittest_id -> n_public}.  Questions with no
-    Prechecked submissions are absent from the dict.
-    """
-    precheck = main_df[main_df["response_type"] == "Prechecked"].copy()
-    precheck = precheck[precheck["pass"].notna()]
-    precheck["pass_len"] = precheck["pass"].astype(str).str.len()
-    n_public = {}
-    for qid, group in precheck.groupby("question_unittest_id")["pass_len"]:
-        modes = group.mode()
-        if len(modes) > 0:
-            n_public[str(qid)] = int(modes.iloc[0])
-        elif len(group) > 0:
-            n_public[str(qid)] = int(group.median())
-    return n_public
 
 
 # ── Item difficulty ──────────────────────────────────────────────────────────
@@ -200,7 +164,6 @@ def _compute_item_difficulty(
 def load_student_split_eval_items(
     data: UnifiedData,
     split: StudentSplit,
-    n_examples: int = 5,
     seed: int = 42,
 ) -> Tuple[List[EvalItem], Dict[str, ItemDifficulty]]:
     """Convert StudentSplit data into EvalItems for the LLM predictor.
@@ -213,21 +176,43 @@ def load_student_split_eval_items(
     hf_qi = _load_hf_question_details()
     qi = data.question_infos
 
-    # Filter HF questions to this course
-    course_infos = pd.read_csv(
-        f"{snapshot_download(repo_id=HF_REPO_ID, repo_type='dataset', local_files_only=True)}/course_infos.csv"
-    )
-    course_row = course_infos[course_infos["course_name"] == data.course_name]
-    if len(course_row) > 0:
-        course_id = course_row["course_id"].values[0]
-        hf_qi = hf_qi[hf_qi["course_id"] == course_id]
+    # Join HF questions with course-id filtering as primary; question_name
+    # matching is only a fallback for names absent from the course's own rows
+    # (courses may share question banks across years, and a same-named question
+    # from another course carries the wrong question_id).
+    test_item_set_pre = set(split.test_item_indices.tolist())
+    needed_qnames = set(qi[qi.index.isin(test_item_set_pre)]["qname"].unique())
+
+    course_id = None
+    if "course_id" in data.main_data.columns and len(data.main_data):
+        course_id = int(data.main_data["course_id"].iloc[0])
+
+    hf_qi = hf_qi[hf_qi["question_name"].isin(needed_qnames)]
+    if course_id is not None and "course_id" in hf_qi.columns:
+        in_course = hf_qi["course_id"].astype(int) == course_id
+        course_qnames = set(hf_qi.loc[in_course, "question_name"])
+        fallback = hf_qi[~in_course & ~hf_qi["question_name"].isin(course_qnames)]
+        if len(fallback):
+            logger.warning(
+                "%d question names matched only by text from a different course; "
+                "their question_ids will not match this course's submissions",
+                fallback["question_name"].nunique(),
+            )
+        hf_qi = pd.concat([hf_qi[in_course], fallback])
+    # The in-course and fallback blocks are disjoint by question_name; within
+    # the fallback block keep="first" is arbitrary but deterministic.
+    hf_qi = hf_qi.drop_duplicates(subset=["question_name"], keep="first")
+
+    matched = needed_qnames & set(hf_qi["question_name"])
+    if matched:
+        logger.info("Matched %d/%d target questions in HF data", len(matched), len(needed_qnames))
+    else:
+        logger.warning("No question name overlap found in HF data for %s", data.course_name)
 
     # Map qname -> full question details from HuggingFace
     hf_lookup = {}
-    qname_to_qid = {}
     for _, row in hf_qi.iterrows():
         hf_lookup[row["question_name"]] = row
-        qname_to_qid[row["question_name"]] = int(row["question_id"])
 
     # Identify unique target questions (weeks 4+) from test items
     test_item_set = set(split.test_item_indices.tolist())
@@ -238,31 +223,8 @@ def load_student_split_eval_items(
     # Map test student indices to student_ids
     test_student_ids = [data.student_ids[i] for i in split.test_student_indices]
 
-    # Build train question IDs (weeks 1-3) for context filtering
-    train_qnames = qi.iloc[split.train_item_indices]["qname"].unique()
-    train_qids = set()
-    for qn in train_qnames:
-        qid = qname_to_qid.get(qn)
-        if qid is not None:
-            train_qids.add(qid)
-
-    # Build qid -> qname lookup from HF data
-    qid_to_qname = {int(row["question_id"]): row["question_name"] for _, row in hf_qi.iterrows()}
-
-    test_sid_set = set(str(sid) for sid in test_student_ids)
     main_df = data.main_data.copy()
     main_df["student_id"] = main_df["student_id"].astype(str)
-
-    # Context submissions: test students' weeks 1-3 data
-    context_df = main_df[
-        main_df["student_id"].isin(test_sid_set)
-        & main_df["question_unittest_id"].isin(train_qids)
-    ].sort_values(["student_id", "timestamp"])
-
-    # Pre-group context by student
-    student_context = {}
-    for sid, group in context_df.groupby("student_id"):
-        student_context[str(sid)] = group.to_dict("records")
 
     # Build EvalItems
     items = []
@@ -298,41 +260,6 @@ def load_student_split_eval_items(
             if not q_unittests or q_unittests == "nan":
                 continue
 
-            # Build examples from this student's weeks 1-3 history
-            examples = []
-            rows = student_context.get(sid_str, [])
-
-            # Get unique prior questions, sorted by timestamp (most recent last)
-            prior_qs = {}
-            for r in rows:
-                pqid = r["question_unittest_id"]
-                if str(pqid) != qid:
-                    prior_qs.setdefault(pqid, []).append(r)
-
-            # Take n_examples most recent prior questions
-            sorted_pqs = sorted(
-                prior_qs.items(),
-                key=lambda x: x[1][-1]["timestamp"],
-            )[-n_examples:]
-
-            for pqid, pq_rows in sorted_pqs:
-                pq_name = qid_to_qname.get(int(pqid), "")
-                pq_hf = hf_lookup.get(pq_name)
-                pq_text = str(pq_hf["question_text"]) if pq_hf is not None else ""
-                pq_template = str(pq_hf["question_template"]) if pq_hf is not None else ""
-
-                for r in pq_rows:
-                    if not r.get("response"):
-                        continue
-                    examples.append(Example(
-                        question_name=pq_name,
-                        question_text=pq_text,
-                        question_template=pq_template,
-                        response=str(r["response"]),
-                        response_type=str(r.get("response_type", "Submit")),
-                        pass_pattern=str(r.get("pass", "")),
-                    ))
-
             # Collect this student's real submissions on the target question
             target_rows = main_df[
                 (main_df["student_id"] == sid_str)
@@ -349,6 +276,11 @@ def load_student_split_eval_items(
                     "response_type": str(r.get("response_type", "Submit")),
                 })
 
+            # Cross-course fallback rows carry a foreign question_id that
+            # matches no submissions here; such items can never emit output.
+            if not real_attempts:
+                continue
+
             item = EvalItem(
                 question_id=qid,
                 student_id=sid_str,
@@ -356,7 +288,6 @@ def load_student_split_eval_items(
                 question_text=q_text,
                 question_template=q_template,
                 question_unittests=q_unittests,
-                examples=examples,
             )
             item._real_attempts = real_attempts
             items.append(item)
