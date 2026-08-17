@@ -19,7 +19,12 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from .data_loader import EvalItem, parse_test_cases
-from .prompts import build_prompt, extract_action, extract_code
+from .prompts import (
+    build_direct_solve_prompt,
+    build_prompt,
+    extract_action,
+    extract_code,
+)
 from .runners import MODEL_CONFIGS, create_runner
 
 logger = logging.getLogger(__name__)
@@ -169,6 +174,23 @@ def _build_initial_prompt(item, persona_builder=None):
 # ── Main evaluation loop ───────────────────────────────────────────────────
 
 
+def _format_failed_tests(pass_pattern, test_cases, max_shown=5):
+    """Human-readable list of failing test cases for direct-solve retries."""
+    failed = [k for k, c in enumerate(pass_pattern) if c != "1"]
+    lines = [f"Test results: {pass_pattern} (1=pass, 0=fail)"]
+    for k in failed[:max_shown]:
+        if k < len(test_cases):
+            tc = test_cases[k]
+            lines.append(
+                f"Failed test {k + 1}:\n"
+                f"  Input: {tc['input']}\n"
+                f"  Expected output: {tc['output']}"
+            )
+    if len(failed) > max_shown:
+        lines.append(f"...and {len(failed) - max_shown} more failing tests.")
+    return "\n".join(lines)
+
+
 def run_evaluation(
     items: List[EvalItem],
     model_key: str,
@@ -184,6 +206,7 @@ def run_evaluation(
     prompt_log_file=None,
     base_url: Optional[str] = None,
     no_trajectory: bool = False,
+    direct_solve: bool = False,
 ) -> List[EvalResult]:
     """Run iterative LLM evaluation on a list of items.
 
@@ -209,7 +232,10 @@ def run_evaluation(
                 existing_rows = [json.loads(line) for line in f]
             completed = {(str(r["student_id"]), str(r["question_unittest_id"])) for r in existing_rows}
             original_count = len(items)
-            items = [it for it in items if (str(it.student_id), str(it.question_id)) not in completed]
+            resume_id = ((lambda it: ("direct_solve", str(it.question_id)))
+                         if direct_solve
+                         else (lambda it: (str(it.student_id), str(it.question_id))))
+            items = [it for it in items if resume_id(it) not in completed]
             logger.info("Resume: %d completed, %d remaining (was %d).",
                         len(completed), len(items), original_count)
 
@@ -226,6 +252,7 @@ def run_evaluation(
             student_to_course, student_to_section, question_to_is_exam,
             persona_builder, history_summarizer, prompt_log_file,
             no_trajectory=no_trajectory,
+            direct_solve=direct_solve,
         )
         all_results.extend(chunk_results)
 
@@ -247,6 +274,7 @@ def _run_chunk(
     student_to_course, student_to_section, question_to_is_exam,
     persona_builder, history_summarizer, prompt_log_file,
     no_trajectory=False,
+    direct_solve=False,
 ):
     """Run the iterative attempt loop on a chunk of items."""
     # Parse test cases
@@ -276,8 +304,13 @@ def _run_chunk(
     from .summarize import RAG_SUMMARY_PROMPT
     item_max_attempts = {}
     for idx, item in enumerate(chunk_items):
-        real = getattr(item, "_real_attempts", None) or []
-        item_max_attempts[idx] = min(len(real), max_attempts)
+        if direct_solve:
+            # No real trajectory to follow; iterate until solved or capped.
+            item_max_attempts[idx] = max_attempts
+        else:
+            real = getattr(item, "_real_attempts", None) or []
+            item_max_attempts[idx] = min(len(real), max_attempts)
+    direct_feedback = {}  # idx -> failed-test feedback for the next turn
 
     for attempt in range(max_attempts):
         if not active:
@@ -297,7 +330,14 @@ def _run_chunk(
             item = chunk_items[idx]
 
             if attempt == 0:
-                rp = _build_initial_prompt(item, persona_builder)
+                if direct_solve:
+                    rp = build_direct_solve_prompt(
+                        question_name=item.question_name,
+                        question_text=item.question_text,
+                        question_template=item.question_template,
+                    )
+                else:
+                    rp = _build_initial_prompt(item, persona_builder)
                 prompts_for_log.append(rp)
                 if isinstance(rp, tuple):
                     sys_msg, user_msg = rp
@@ -315,7 +355,16 @@ def _run_chunk(
             else:
                 conv = conversations.get(idx)
 
-                if no_trajectory:
+                if direct_solve:
+                    # The LLM's previous code is in the conversation; feed it
+                    # the failing tests and ask for a fix.
+                    feedback_msg = (
+                        "Your previous submission failed some unit tests.\n\n"
+                        f"{direct_feedback.get(idx, '')}\n"
+                        "Debug your code and fix it to pass all unit tests. "
+                        "Respond with only the corrected ```cpp code block."
+                    )
+                elif no_trajectory:
                     # Only the real student's attempts are removed; the model
                     # still sees its own prior turns via the conversation.
                     feedback_msg = f"This is attempt {attempt + 1}. Predict what the student would submit."
@@ -410,7 +459,7 @@ def _run_chunk(
         actions = []
         codes = []
         for i, idx in enumerate(active):
-            action = extract_action(all_responses[i])
+            action = "Submit" if direct_solve else extract_action(all_responses[i])
             code = extract_code(all_responses[i])
             actions.append(action)
             codes.append(code)
@@ -452,9 +501,17 @@ def _run_chunk(
             results[idx].attempts.append(AttemptRecord(
                 attempt, timestamp, rtype, user_prompts[i], raw, codes[i], pp))
 
-            next_active.append(idx)
             if passed:
                 n_passed += 1
+            if direct_solve:
+                # Retire solved items; otherwise carry failing-test feedback
+                # into the next turn.
+                if not passed:
+                    direct_feedback[idx] = _format_failed_tests(
+                        pp, td["test_cases"] if td else [])
+                    next_active.append(idx)
+            else:
+                next_active.append(idx)
 
         logger.info("%s | Attempt %d: %d graded, %d passed all, %d continue",
                     label, attempt + 1, n_graded, n_passed, len(next_active))

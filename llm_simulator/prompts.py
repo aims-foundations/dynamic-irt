@@ -99,6 +99,37 @@ _CODE_INSTRUCTIONS = (
     "No extra characters, whitespace, or text may appear before or after."
 )
 
+_DIRECT_SOLVE_INSTRUCTIONS = (
+    "Solve this C++ programming problem.\n"
+    "Your code replaces the {{ STUDENT_ANSWER }} block in the template.\n"
+    "- Do NOT reproduce any part of the template.\n"
+    "- Do NOT emit `int main()` (it's already declared).\n"
+    "- Include any needed class definitions.\n\n"
+    "Respond with ONLY a ```cpp code block containing your solution. "
+    "No other text."
+)
+
+
+def build_direct_solve_prompt(
+    question_name: str,
+    question_text: str,
+    question_template: str,
+) -> Tuple[str, str]:
+    """Build a prompt for the LLM to solve a question directly (no student context)."""
+    system_message = (
+        "You are an expert C++ programmer. Solve the given programming problem. "
+        "Your code will be tested against hidden unit tests. If your solution "
+        "fails any test cases, you will receive feedback showing your code and "
+        "the failed unit tests, and your goal will be to debug and fix your "
+        "code until all tests pass."
+    )
+    parts = [
+        f"=== Question: {question_name} ===\n{question_text}\n",
+        f"=== Code Template ===\n{question_template}\n",
+        f"\n{_DIRECT_SOLVE_INSTRUCTIONS}",
+    ]
+    return (system_message, "\n".join(parts))
+
 
 # ── Prompt builder ───────────────────────────────────────────────────────────
 

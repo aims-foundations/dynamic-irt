@@ -68,10 +68,22 @@ def main():
                         help="Replace TF-IDF+recency RAG with most recent questions")
     parser.add_argument("--base_url", type=str, default=None,
                         help="Override base_url for OpenAI-compatible server backends")
+    parser.add_argument("--direct_solve", action="store_true",
+                        help="Ablation: LLM solves each unique question directly, "
+                             "with no student-specific context")
     args = parser.parse_args()
 
     if args.recent_questions and args.no_rag:
         parser.error("--recent_questions has no effect with --no_rag")
+    if args.direct_solve and (args.no_persona or args.no_rag or args.no_metadata
+                              or args.no_trajectory or args.recent_questions):
+        parser.error("--direct_solve already removes all student context; "
+                     "do not combine it with other ablation flags")
+    if args.direct_solve:
+        # Direct solve uses none of the student-context machinery; reuse the
+        # existing skip paths.
+        args.no_persona = args.no_rag = args.no_metadata = True
+        args.no_summarize = True
 
     # 1. Load data (same as psychometric models)
     # val_frac=0: the simulator has no validation phase, and the default 0.15
@@ -80,6 +92,19 @@ def main():
 
     # 2. Convert to EvalItems (all questions, all students)
     items, difficulties = load_student_split_eval_items(data, split, seed=args.seed)
+
+    if args.direct_solve:
+        # One item per unique question; the LLM plays itself, not a student.
+        seen_questions = set()
+        deduped = []
+        for item in items:
+            if item.question_id not in seen_questions:
+                seen_questions.add(item.question_id)
+                item.student_id = "direct_solve"
+                item._real_attempts = []
+                deduped.append(item)
+        items = deduped
+        logger.info("Direct solve: deduplicated to %d unique questions", len(items))
 
     # 3. Filter students first, then cap questions per student
     if args.max_students:
@@ -306,7 +331,10 @@ def main():
         ("no_summarize", args.no_summarize),
         ("recent_questions", args.recent_questions),
     ] if on]
-    if flags:
+    if args.direct_solve:
+        # Matches the existing results directory for this condition.
+        output_dir = os.path.join(output_dir, "direct_solve")
+    elif flags:
         output_dir = os.path.join(output_dir, "ablation_" + "_".join(flags))
 
     for model_key in args.models:
@@ -326,6 +354,7 @@ def main():
                 prompt_log_file=args.log_prompts,
                 no_trajectory=args.no_trajectory,
                 base_url=args.base_url,
+                direct_solve=args.direct_solve,
             )
         except Exception as e:
             logger.error("Model %s failed: %s", model_key, e, exc_info=True)
