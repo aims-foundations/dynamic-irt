@@ -18,11 +18,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib.colors import ListedColormap
+from tueplots import bundles
 
 from dynamic_models.temporal_eval.data_filter import DEFAULT_FILTER, filter_data
 from dynamic_models.temporal_eval.data_loader import load_student_split_data, load_unified_data
 
 matplotlib.use("Agg")
+plt.rcParams.update(bundles.icml2022())
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
+})
 
 
 def collapse_last_attempt(corr, max_attempt=None):
@@ -68,7 +75,7 @@ def get_attempt_snapshots(corr, max_attempt=5):
     If a student has fewer than max_attempt attempts on an item,
     later snapshots repeat their last valid result.
     """
-    n_s, n_i, n_a = corr.shape
+    n_s, n_i, _ = corr.shape
     arr = corr.numpy()
     valid_mask = arr != -1
     cum_valid = np.cumsum(valid_mask, axis=2)
@@ -88,59 +95,6 @@ def get_attempt_snapshots(corr, max_attempt=5):
     return snapshots
 
 
-def plot_avg_improvement(corr, row_indices, col_indices, output_path, raw_corr=None):
-    """Line plot of average score across attempts: filtered vs all (unfiltered) data."""
-    snapshots = get_attempt_snapshots(corr, max_attempt=10)
-    attempts = list(range(1, 11))
-
-    if raw_corr is None:
-        raw_corr = corr
-    raw_snapshots = get_attempt_snapshots(raw_corr, max_attempt=10)
-    all_students = np.arange(raw_corr.shape[0])
-    all_items = np.arange(raw_corr.shape[1])
-
-    filtered_scores = []
-    all_scores = []
-    for snap_f, snap_a in zip(snapshots, raw_snapshots):
-        sub_f = snap_f[np.ix_(row_indices, col_indices)]
-        valid_f = sub_f[sub_f != -1]
-        filtered_scores.append(valid_f.mean() if len(valid_f) > 0 else 0.0)
-
-        sub_a = snap_a[np.ix_(all_students, all_items)]
-        valid_a = sub_a[sub_a != -1]
-        all_scores.append(valid_a.mean() if len(valid_a) > 0 else 0.0)
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(attempts, filtered_scores, marker="o", linewidth=2, color="#1f77b4",
-            label="Filtered")
-    ax.plot(attempts, all_scores, marker="s", linewidth=2, color="#d62728", linestyle="--",
-            label="All data")
-
-    ax.set_xlabel("Attempt Number", fontsize=14)
-    ax.set_ylabel("Average Score (pass rate)", fontsize=14)
-    ax.set_title("Average Score by Attempt", fontsize=16)
-    ax.set_xticks(attempts)
-    ax.tick_params(labelsize=12)
-    all_vals = filtered_scores + all_scores
-    y_min = min(all_vals) - 0.05
-    y_max = max(all_vals) + 0.05
-    ax.set_ylim(y_min, y_max)
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=12)
-
-    for i, (sf, sa) in enumerate(zip(filtered_scores, all_scores)):
-        ax.annotate(f"{sf:.3f}", (attempts[i], sf), textcoords="offset points",
-                    xytext=(0, 10), ha="center", fontsize=10, color="#1f77b4")
-        ax.annotate(f"{sa:.3f}", (attempts[i], sa), textcoords="offset points",
-                    xytext=(0, -15), ha="center", fontsize=10, color="#d62728")
-
-    fig.tight_layout()
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Plot saved: {output_path}")
-
-
 def plot_attempt_progression_compact(corr, matrix, qi, row_indices, col_indices, selected_qs, output_path):
     """All attempts 1-10 in a single image with shared axis labels."""
     attempt_nums = list(range(1, 11))
@@ -158,11 +112,8 @@ def plot_attempt_progression_compact(corr, matrix, qi, row_indices, col_indices,
     bounds = [-0.1, 0.25, 0.75, 1.1]
     norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
 
-    n_rows, n_cols = sub_last.shape
     n_panel_rows, n_panel_cols = 2, 5
-    panel_w = max(7, min(n_cols * 0.035, 18))
-    panel_h = max(12, min(n_rows * 0.05, 50))
-    fig, axes = plt.subplots(n_panel_rows, n_panel_cols, figsize=(panel_w * n_panel_cols, panel_h * n_panel_rows), sharey=True, sharex=True)
+    fig, axes = plt.subplots(n_panel_rows, n_panel_cols, figsize=(22.5, 6), sharey=True, sharex=True)
 
     for idx, a in enumerate(attempt_nums):
         r, c = divmod(idx, n_panel_cols)
@@ -172,21 +123,21 @@ def plot_attempt_progression_compact(corr, matrix, qi, row_indices, col_indices,
         plot_data[plot_data == -1] = 0.5
         ax.imshow(plot_data, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
         _add_question_separators(ax, qi, col_indices, selected_qs)
-        ax.set_title(f"Attempt {a}", fontsize=40, pad=16)
-        ax.tick_params(axis="both", labelsize=28)
+        ax.set_title(f"Attempt {a}", fontsize=26, pad=10)
+        ax.tick_params(axis="y", labelsize=20)
 
-    fig.supxlabel("Unit tests (chronological)", fontsize=44, y=0.01)
-    fig.supylabel("Students", fontsize=44, x=0.005)
+    fig.supxlabel("Unit tests (chronological)", fontsize=28, y=0.01)
+    fig.supylabel("Students", fontsize=28, x=0.005)
 
     from matplotlib.patches import Patch
     fig.legend(handles=[
         Patch(facecolor="#2080cc", label="Pass"),
         Patch(facecolor="#d63030", label="Fail"),
         Patch(facecolor="#b8b8b8", label="No data"),
-    ], loc="lower right", ncol=3, fontsize=36, bbox_to_anchor=(1.0, -0.01),
+    ], loc="lower right", ncol=3, fontsize=26, bbox_to_anchor=(1.0, -0.01),
        frameon=False)
 
-    fig.tight_layout(rect=[0.025, 0.045, 1, 1])
+    fig.tight_layout(rect=[0.012, 0.07, 1, 1], h_pad=1.0)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -221,16 +172,10 @@ def main():
         corr = data.correctness_matrix
         selected_qs = sorted(qi["qidx"].unique())
 
-    raw_data = load_unified_data(args.course)
-    raw_corr = raw_data.correctness_matrix
-
     matrix = collapse_last_attempt(corr, max_attempt=DEFAULT_FILTER.max_attempts)
 
     compact_path = os.path.join(output_dir, "attempt_progression_compact.png")
     plot_attempt_progression_compact(corr, matrix, qi, row_indices, col_indices, selected_qs, compact_path)
-
-    improvement_path = os.path.join(output_dir, "avg_improvement_by_attempt.png")
-    plot_avg_improvement(corr, row_indices, col_indices, improvement_path, raw_corr=raw_corr)
 
 
 if __name__ == "__main__":

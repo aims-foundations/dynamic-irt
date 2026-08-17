@@ -19,11 +19,12 @@ plt.rcParams.update({
     "text.usetex": True,
     "font.family": "serif",
     "font.serif": ["Computer Modern Roman"],
-    "axes.labelsize": 10,
-    "font.size": 10,
-    "legend.fontsize": 8,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
+    "axes.labelsize": 14,
+    "axes.titlesize": 14,
+    "font.size": 14,
+    "legend.fontsize": 12,
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12,
 })
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "clustering_outputs")
@@ -103,9 +104,9 @@ def main():
             print(f"  {course_name}: {n_students} students, {len(padded):,} trajectories, "
                   f"attempt 1 mean={means[0]:.2f}, attempt 30 mean={means[-1]:.2f}")
 
-        ax.set_xlabel("Attempts")
+        ax.set_xlabel("Attempt Number on a Problem")
         ax.set_ylabel("Marks")
-        ax.set_title(f"{group_name} Courses")
+        ax.set_title(f"{group_name}: Marks by Attempt Within a Problem")
         ax.set_xlim(1, MAX_ATTEMPTS)
         ax.set_ylim(0, 10)
 
@@ -166,11 +167,11 @@ def main():
 
         ax.set_xlabel("Student's $n$-th Problem (chronological)")
         ax.set_ylabel("Marks")
-        ax.set_title(f"{group_name} -- Last Submit")
+        ax.set_title(f"{group_name}: Final Submission Mark per Problem")
         ax.set_ylim(0, 10)
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=2, fontsize=8, bbox_to_anchor=(0.5, 1.0))
+    fig.legend(handles, labels, loc="upper center", ncol=2, fontsize=12, bbox_to_anchor=(0.5, 1.0))
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     out = os.path.join(OUTPUT_DIR, "learning_curves_combined.png")
     plt.savefig(out, dpi=300, bbox_inches="tight")

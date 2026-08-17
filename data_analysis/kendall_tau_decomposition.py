@@ -4,12 +4,19 @@ Loads LLM predictions from local JSONL, aligns with ground truth via
 load_student_split_data, and produces the decomposition test figure.
 
 Usage:
-    python data_analysis/llm_prediction_deep_analysis.py
+    python data_analysis/kendall_tau_decomposition.py
+        [--jsonl PATH] [--output_dir DIR] [--course COURSE]
+
+--course (default dsa_hk231) selects the ground-truth split the JSONL
+predictions are aligned against.
 """
 
 import json
 import os
+import sys
 import warnings
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -19,6 +26,7 @@ import pandas as pd
 from huggingface_hub import snapshot_download
 from scipy.stats import kendalltau
 
+from data_analysis.llm_eval_common import _pass_fraction
 from dynamic_models.temporal_eval.data_loader import load_student_split_data
 
 warnings.filterwarnings("ignore")
@@ -31,20 +39,12 @@ JSONL_PATH = os.path.join(
     os.path.dirname(__file__), "..",
     "results", "llm_student_eval", "dsa_hk231", "claude_attempts10.jsonl",
 )
-COURSE = "dsa_hk231"
 OUT_DIR = os.path.join(
     os.path.dirname(__file__), "..", "results", "llm_predictor", "student_split",
 )
 
 
-def _pass_fraction(s):
-    s = str(s).strip()
-    if not s or s == "nan":
-        return np.nan
-    return sum(c == "1" for c in s) / len(s) if len(s) > 0 else np.nan
-
-
-def load_and_align():
+def load_and_align(course):
     with open(JSONL_PATH) as f:
         rows = [json.loads(l) for l in f]
 
@@ -54,7 +54,7 @@ def load_and_align():
     llm_df = llm_df.sort_values("attempt_id")
     llm_last = llm_df.groupby(["student_id", "question_unittest_id"]).last().reset_index()
 
-    data, split = load_student_split_data(COURSE)
+    data, split = load_student_split_data(course)
     qi = data.question_infos
     test_item_set = set(split.test_item_indices.tolist())
 
@@ -251,10 +251,23 @@ def fig_decomposition_test(merged):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--jsonl", default=None)
+    parser.add_argument("--output_dir", default=None)
+    parser.add_argument("--course", default="dsa_hk231")
+    args = parser.parse_args()
+
+    global JSONL_PATH, OUT_DIR
+    if args.jsonl:
+        JSONL_PATH = args.jsonl
+    if args.output_dir:
+        OUT_DIR = args.output_dir
+
     os.makedirs(OUT_DIR, exist_ok=True)
 
     print("Loading and aligning LLM predictions with ground truth...")
-    merged = load_and_align()
+    merged = load_and_align(args.course)
 
     print("\nDecomposition test...")
     decomp = fig_decomposition_test(merged)
