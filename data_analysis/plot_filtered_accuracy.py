@@ -1,12 +1,11 @@
-"""Plot per-attempt accuracy for models on student-split evaluation.
+"""Plot per-attempt balanced accuracy for models on student-split evaluation.
 
-Each point has a confidence interval from two-way cluster bootstrap
-(resampling both students and questions).
+Each point has a confidence interval from an i.i.d. bootstrap over
+observations at that attempt.
 
 Usage:
     python data_analysis/plot_filtered_accuracy.py
     python data_analysis/plot_filtered_accuracy.py --courses dsa_hk231
-    python data_analysis/plot_filtered_accuracy.py --mode temporal --courses dsa_hk231
 """
 
 import argparse
@@ -14,84 +13,72 @@ import os
 import pickle
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_ROOT)
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
-from dynamic_models.temporal_eval.data_filter import DEFAULT_FILTER
-
 matplotlib.use("Agg")
 
-ALL_COURSES = ["dsa_hk231", "dsa_hk221", "pf_hk232", "pf_hk222"]
+from data_analysis.llm_eval_common import (
+    COURSE_TITLES,
+    MODEL_DISPLAY_NAMES as DISPLAY_NAMES,
+    MODEL_STYLES,
+    compute_llm_balanced_accuracy,
+)
 
-MODEL_STYLES = {
-    "IRT": {"color": "#2080cc", "marker": "o"},
-    "CIRT-Decay": {"color": "#d63030", "marker": "s"},
-    "DynamicIRT": {"color": "#e68a00", "marker": "p"},
-    "BKT": {"color": "#2e8b57", "marker": "D"},
-    "DKT": {"color": "#7b2d8e", "marker": "^"},
-}
-
-DISPLAY_NAMES = {
-    "CIRT-Decay": "CIRT",
-}
-
-
-def twoway_cluster_bootstrap_ci(student_ids, item_ids, matches, n_boot=2000, confidence=0.95):
-    """Two-way cluster bootstrap: resample both students and questions.
-
-    Uses a sparse matrix approach for speed: build a (student x item) mean
-    matrix, then resample rows and columns.
-    """
-    rng = np.random.default_rng(42)
-    alpha = (1 - confidence) / 2
-
-    students = np.unique(student_ids)
-    items = np.unique(item_ids)
-    s_map = {s: i for i, s in enumerate(students)}
-    q_map = {q: i for i, q in enumerate(items)}
-
-    n_s, n_q = len(students), len(items)
-    sum_mat = np.zeros((n_s, n_q))
-    count_mat = np.zeros((n_s, n_q))
-    for s, q, m in zip(student_ids, item_ids, matches):
-        si, qi = s_map[s], q_map[q]
-        sum_mat[si, qi] += m
-        count_mat[si, qi] += 1
-
-    boot_means = np.empty(n_boot)
-    for b in range(n_boot):
-        s_idx = rng.integers(0, n_s, size=n_s)
-        q_idx = rng.integers(0, n_q, size=n_q)
-        sub_sum = sum_mat[np.ix_(s_idx, q_idx)]
-        sub_cnt = count_mat[np.ix_(s_idx, q_idx)]
-        total_cnt = sub_cnt.sum()
-        if total_cnt > 0:
-            boot_means[b] = sub_sum.sum() / total_cnt
-        else:
-            boot_means[b] = np.nan
-
-    boot_means = boot_means[~np.isnan(boot_means)]
-    return np.quantile(boot_means, alpha), np.quantile(boot_means, 1 - alpha)
+class _DictPrediction:
+    """Wrap a dict result (from Modal) to look like PredictionResult."""
+    def __init__(self, d, ref_attempts=None):
+        self.y_true = np.array(d["y_true"])
+        self.y_pred_prob = np.array(d["y_pred_prob"])
+        self.attempt_indices = np.array(d["attempt_indices"]) if "attempt_indices" in d else ref_attempts
+        self.student_indices = np.array(d["student_indices"]) if "student_indices" in d else np.zeros(len(self.y_true), dtype=int)
+        self.item_indices = np.array(d["item_indices"]) if "item_indices" in d else np.zeros(len(self.y_true), dtype=int)
+        self.synthetic_indices = "student_indices" not in d or "item_indices" not in d
+        self.losses = d.get("losses")
 
 
-def load_prediction_result(model_name, output_dir, mode="student"):
+def _load_ref_attempts(output_dir, n_obs):
+    """Borrow attempt_indices from another model with the same split."""
+    for fname in os.listdir(output_dir):
+        if not fname.endswith("_student_pred.pkl"):
+            continue
+        with open(os.path.join(output_dir, fname), "rb") as f:
+            pred = pickle.load(f)
+        if hasattr(pred, "attempt_indices") and pred.attempt_indices is not None:
+            if len(pred.attempt_indices) == n_obs:
+                return np.array(pred.attempt_indices)
+    return None
+
+
+def load_prediction_result(model_name, output_dir):
     """Load a saved PredictionResult pickle."""
-    if mode == "student":
-        pkl_path = os.path.join(output_dir, f"{model_name}_student_pred.pkl")
-    else:
-        cutoff = DEFAULT_FILTER.max_week
-        pkl_path = os.path.join(output_dir, f"{model_name}_W{cutoff}_pred.pkl")
+    pkl_path = os.path.join(output_dir, f"{model_name}_student_pred.pkl")
     if not os.path.exists(pkl_path):
         return None
     with open(pkl_path, "rb") as f:
-        return pickle.load(f)
+        pred = pickle.load(f)
+    if isinstance(pred, dict):
+        ref = _load_ref_attempts(output_dir, len(pred["y_true"]))
+        return _DictPrediction(pred, ref)
+    return pred
+
+
+def _balanced_accuracy(actual, pred_binary):
+    pos = actual == 1
+    neg = actual == 0
+    if pos.sum() == 0 or neg.sum() == 0:
+        return np.nan
+    tpr = (pred_binary[pos] == 1).mean()
+    tnr = (pred_binary[neg] == 0).mean()
+    return (tpr + tnr) / 2
 
 
 def compute_per_attempt_accuracy(prediction, max_attempts=10):
-    """Compute accuracy and CI at each attempt number."""
+    """Compute balanced accuracy and CI at each attempt number."""
     y_true = prediction.y_true
     y_pred = prediction.y_pred_prob
     s_idx = prediction.student_indices
@@ -127,148 +114,49 @@ def compute_per_attempt_accuracy(prediction, max_attempts=10):
 
         pred_binary = (y_pred[mask] >= 0.5).astype(int)
         actual = y_true[mask].astype(int)
-        matches = (pred_binary == actual).astype(int)
-        acc = matches.mean()
-        accs.append(acc)
+        bal_acc = _balanced_accuracy(actual, pred_binary)
+        accs.append(bal_acc)
         counts.append(int(mask.sum()))
+        if np.isnan(bal_acc):
+            ci_los.append(np.nan)
+            ci_his.append(np.nan)
+            continue
 
-        lo, hi = twoway_cluster_bootstrap_ci(
-            s_idx[mask], i_idx[mask], matches
-        )
-        ci_los.append(lo)
-        ci_his.append(hi)
+        rng = np.random.default_rng(42)
+        boot_vals = []
+        for _ in range(2000):
+            idx = rng.integers(0, len(actual), size=len(actual))
+            b = _balanced_accuracy(actual[idx], pred_binary[idx])
+            if not np.isnan(b):
+                boot_vals.append(b)
+        boot_vals = np.array(boot_vals)
+        ci_los.append(np.quantile(boot_vals, 0.025) if len(boot_vals) > 10 else np.nan)
+        ci_his.append(np.quantile(boot_vals, 0.975) if len(boot_vals) > 10 else np.nan)
 
     return np.array(accs), np.array(ci_los), np.array(ci_his), np.array(counts)
 
 
-def _resolve_llm_jsonl(output_dir):
-    path = os.path.join(
-        output_dir.replace("student_eval", "llm_student_eval"),
-        "claude_attempts10.jsonl",
-    )
-    return path if os.path.exists(path) else None
+LLM_MODELS = {
+    "LLM": {
+        "jsonl": "qwen_server_attempts10.jsonl",
+        "color": "#883300",
+        "marker": "P",
+    },
+}
 
 
 def compute_llm_per_attempt_accuracy(llm_jsonl_path, course, max_attempts=10):
-    import json
-    from collections import defaultdict
-    from dynamic_models.temporal_eval.data_loader import load_student_split_data
-    from huggingface_hub import snapshot_download
-    import pandas as pd
-
-    if not os.path.exists(llm_jsonl_path):
-        return None, None, None, None
-
-    data, split = load_student_split_data(course)
-    qi = data.question_infos
-    test_item_set = set(split.test_item_indices.tolist())
-
-    hf_dir = snapshot_download(
-        repo_id="CodeInsightTeam/code_insights_csv",
-        repo_type="dataset", local_files_only=True,
+    accs, ci_los, ci_his, counts, _ = compute_llm_balanced_accuracy(
+        llm_jsonl_path, course, max_attempts,
     )
-    hf_qi = pd.read_csv(f"{hf_dir}/question_infos.csv")
-    qid_to_name = {
-        str(int(row["question_id"])): row["question_name"]
-        for _, row in hf_qi.iterrows()
-    }
-
-    with open(llm_jsonl_path) as f:
-        rows = [json.loads(l) for l in f]
-
-    llm_by_pair = defaultdict(list)
-    for r in rows:
-        llm_by_pair[(str(r["student_id"]), str(r["question_unittest_id"]))].append(r)
-
-    accs = []
-    ci_los = []
-    ci_his = []
-    counts = []
-
-    for a in range(max_attempts):
-        actuals_list = []
-        preds_list = []
-        student_ids = []
-        item_ids = []
-
-        for (sid, qid), attempts in llm_by_pair.items():
-            s_indices = [i for i in split.test_student_indices
-                         if str(data.student_ids[i]) == sid]
-            if not s_indices:
-                continue
-            s_idx = s_indices[0]
-
-            qname = qid_to_name.get(qid, "")
-            q_items = [i for i in qi[qi["qname"] == qname].index
-                       if i in test_item_set]
-            if not q_items:
-                continue
-
-            real_results = []
-            for qidx in q_items:
-                obs = data.correctness_matrix[s_idx, qidx, :].numpy()
-                valid = obs[obs != -1]
-                if a < len(valid):
-                    real_results.append(int(valid[a]))
-                elif len(valid) > 0:
-                    real_results.append(int(valid[-1]))
-
-            if a < len(attempts):
-                llm_pp = attempts[a]["pass"]
-            else:
-                llm_pp = attempts[-1]["pass"]
-
-            if not real_results:
-                continue
-
-            llm_binary = [int(c) for c in str(llm_pp) if c in "01"]
-            if not llm_binary:
-                continue
-
-            n = min(len(real_results), len(llm_binary))
-            for ti in range(n):
-                actuals_list.append(real_results[ti])
-                preds_list.append(llm_binary[ti])
-                student_ids.append(sid)
-                item_ids.append(qid)
-
-        if len(actuals_list) >= 10:
-            actuals_arr = np.array(actuals_list)
-            preds_arr = np.array(preds_list)
-            pos = actuals_arr == 1
-            neg = actuals_arr == 0
-            tpr = (preds_arr[pos] == 1).mean() if pos.sum() > 0 else np.nan
-            tnr = (preds_arr[neg] == 0).mean() if neg.sum() > 0 else np.nan
-            bal_acc = (tpr + tnr) / 2 if not (np.isnan(tpr) or np.isnan(tnr)) else np.nan
-            accs.append(bal_acc)
-
-            rng = np.random.default_rng(42)
-            boot_vals = []
-            for _ in range(500):
-                idx = rng.integers(0, len(actuals_arr), size=len(actuals_arr))
-                ba, bp = actuals_arr[idx], preds_arr[idx]
-                p = ba == 1; n = ba == 0
-                t = (bp[p] == 1).mean() if p.sum() > 0 else np.nan
-                tn = (bp[n] == 0).mean() if n.sum() > 0 else np.nan
-                if not (np.isnan(t) or np.isnan(tn)):
-                    boot_vals.append((t + tn) / 2)
-            boot_vals = np.array(boot_vals)
-            ci_los.append(np.quantile(boot_vals, 0.025) if len(boot_vals) > 10 else np.nan)
-            ci_his.append(np.quantile(boot_vals, 0.975) if len(boot_vals) > 10 else np.nan)
-        else:
-            accs.append(np.nan)
-            ci_los.append(np.nan)
-            ci_his.append(np.nan)
-        counts.append(len(actuals_list))
-
-    return np.array(accs), np.array(ci_los), np.array(ci_his), np.array(counts)
+    return accs, ci_los, ci_his, counts
 
 
-def plot_course(course, models, max_attempts, output_dir, mode="student"):
+def plot_course(course, models, max_attempts, output_dir, output_suffix=""):
     predictions = {}
     missing = []
     for m in models:
-        pred = load_prediction_result(m, output_dir, mode)
+        pred = load_prediction_result(m, output_dir)
         if pred is not None:
             predictions[m] = pred
             print(f"  Loaded saved predictions for {m}")
@@ -287,50 +175,71 @@ def plot_course(course, models, max_attempts, output_dir, mode="student"):
         if pred is None:
             continue
 
-        accs, ci_los, ci_his, counts = compute_per_attempt_accuracy(pred, max_attempts)
+        accs, ci_los, ci_his, _ = compute_per_attempt_accuracy(pred, max_attempts)
         style = MODEL_STYLES.get(model_name, {"color": "gray", "marker": "o"})
         valid = ~np.isnan(accs)
 
         display = DISPLAY_NAMES.get(model_name, model_name)
         ax.plot(
             x[valid], accs[valid],
-            f"{style['marker']}-",
+            marker=style["marker"], linestyle="-",
             color=style["color"],
             linewidth=2.5, markersize=9,
             label=display,
         )
+        ci_valid = valid & ~np.isnan(ci_los) & ~np.isnan(ci_his)
+        if ci_valid.any():
+            yerr = np.array([accs[ci_valid] - ci_los[ci_valid],
+                             ci_his[ci_valid] - accs[ci_valid]])
+            ax.errorbar(
+                x[ci_valid], accs[ci_valid], yerr=yerr,
+                fmt="none", ecolor=style["color"], alpha=0.4,
+                capsize=3, capthick=1,
+            )
 
-    llm_path = _resolve_llm_jsonl(output_dir)
-    if llm_path:
-        llm_accs, llm_ci_los, llm_ci_his, llm_counts = compute_llm_per_attempt_accuracy(
-            llm_path, course, max_attempts,
-        )
-        if llm_accs is not None:
-            llm_style = {"color": "#e68a00", "marker": "P"}
+    if "LLM" in models:
+        llm_dir = output_dir.replace("student_eval", "llm_student_eval")
+        for llm_name, llm_cfg in LLM_MODELS.items():
+            llm_path = os.path.join(llm_dir, llm_cfg["jsonl"])
+            if not os.path.exists(llm_path):
+                continue
+            llm_accs, llm_ci_los, llm_ci_his, _ = compute_llm_per_attempt_accuracy(
+                llm_path, course, max_attempts,
+            )
             v = ~np.isnan(llm_accs)
             ax.plot(
                 x[v], llm_accs[v],
-                f"{llm_style['marker']}--",
-                color=llm_style["color"],
+                marker=llm_cfg["marker"], linestyle="--",
+                color=llm_cfg["color"],
                 linewidth=2.5, markersize=9,
-                label="LLM",
+                label=llm_name,
             )
-            print(f"  LLM Balanced accuracy: {llm_accs}")
-
+            ci_v = v & ~np.isnan(llm_ci_los) & ~np.isnan(llm_ci_his)
+            if ci_v.any():
+                yerr = np.array([llm_accs[ci_v] - llm_ci_los[ci_v],
+                                 llm_ci_his[ci_v] - llm_accs[ci_v]])
+                ax.errorbar(
+                    x[ci_v], llm_accs[ci_v], yerr=yerr,
+                    fmt="none", ecolor=llm_cfg["color"], alpha=0.4,
+                    capsize=3, capthick=1,
+                )
 
     ax.set_xlabel("Attempt Number", fontsize=16)
-    ax.set_ylabel("Accuracy", fontsize=16)
-    ax.set_title("DSA 231", fontsize=18)
+    ax.set_ylabel("Balanced Accuracy", fontsize=16)
+    ax.set_title(COURSE_TITLES.get(course, course), fontsize=18)
     ax.set_xticks(x)
     ax.tick_params(labelsize=14)
     ax.set_xlim(0.5, max_attempts + 0.5)
-    ax.set_ylim(0.5, 0.9)
+    ax.autoscale(axis="y")
+    y_lo, y_hi = ax.get_ylim()
+    pad = 0.02 * (y_hi - y_lo)
+    ax.set_ylim(y_lo - pad, y_hi + pad)
     ax.legend(fontsize=13)
     ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
-    out_path = os.path.join(output_dir, "accuracy_vs_attempt.png")
+    out_path = os.path.join(output_dir, f"accuracy_vs_attempt{output_suffix}.png")
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Plot saved: {out_path}")
@@ -339,20 +248,94 @@ def plot_course(course, models, max_attempts, output_dir, mode="student"):
 def main():
     parser = argparse.ArgumentParser(description="Plot per-attempt accuracy")
     parser.add_argument("--courses", nargs="+", default=["dsa_hk231"])
-    parser.add_argument("--models", nargs="+", default=["IRT", "CIRT-Decay", "DynamicIRT", "BKT", "DKT"])
+    parser.add_argument("--models", nargs="+", default=["IRT", "CIRT", "BKT", "DKT", "CodeDKT", "RSSM", "LLM"])
     parser.add_argument("--max_attempts", type=int, default=10)
-    parser.add_argument("--mode", choices=["student", "temporal"], default="student")
+    parser.add_argument("--output_suffix", type=str, default="")
     args = parser.parse_args()
 
     for course in args.courses:
         print(f"\n{'=' * 60}")
         print(f"Course: {course}")
         print(f"{'=' * 60}")
-        if args.mode == "student":
-            output_dir = f"results/student_eval/{course}"
-        else:
-            output_dir = f"results/filtered_eval/{course}"
-        plot_course(course, args.models, args.max_attempts, output_dir, args.mode)
+        output_dir = f"results/student_eval/{course}"
+        plot_course(course, args.models, args.max_attempts, output_dir, args.output_suffix)
+
+    # Combined plot if multiple courses
+    if len(args.courses) > 1:
+        plot_combined(args.courses, args.models, args.max_attempts)
+
+
+def plot_combined(courses, models, max_attempts):
+    fig, axes = plt.subplots(len(courses), 1, figsize=(10, 7 * len(courses)))
+    x = np.arange(1, max_attempts + 1)
+
+    for idx, course in enumerate(courses):
+        ax = axes[idx]
+        output_dir = f"results/student_eval/{course}"
+
+        for model_name in models:
+            if model_name == "LLM":
+                continue
+            pred = load_prediction_result(model_name, output_dir)
+            if pred is None:
+                continue
+            accs, ci_los, ci_his, _ = compute_per_attempt_accuracy(pred, max_attempts)
+            style = MODEL_STYLES.get(model_name, {"color": "gray", "marker": "o"})
+            valid = ~np.isnan(accs)
+            display = DISPLAY_NAMES.get(model_name, model_name)
+            ax.plot(x[valid], accs[valid], marker=style["marker"], linestyle="-",
+                    color=style["color"], linewidth=2.5, markersize=9, label=display)
+            ci_valid = valid & ~np.isnan(ci_los) & ~np.isnan(ci_his)
+            if ci_valid.any():
+                yerr = np.array([accs[ci_valid] - ci_los[ci_valid],
+                                 ci_his[ci_valid] - accs[ci_valid]])
+                ax.errorbar(x[ci_valid], accs[ci_valid], yerr=yerr,
+                            fmt="none", ecolor=style["color"], alpha=0.4,
+                            capsize=3, capthick=1)
+
+        if "LLM" in models:
+            llm_dir = output_dir.replace("student_eval", "llm_student_eval")
+            for llm_name, llm_cfg in LLM_MODELS.items():
+                llm_path = os.path.join(llm_dir, llm_cfg["jsonl"])
+                if not os.path.exists(llm_path):
+                    continue
+                llm_accs, llm_ci_los, llm_ci_his, _ = compute_llm_per_attempt_accuracy(
+                    llm_path, course, max_attempts)
+                v = ~np.isnan(llm_accs)
+                ax.plot(x[v], llm_accs[v], marker=llm_cfg["marker"], linestyle="--",
+                        color=llm_cfg["color"], linewidth=2.5, markersize=9, label=llm_name)
+                ci_v = v & ~np.isnan(llm_ci_los) & ~np.isnan(llm_ci_his)
+                if ci_v.any():
+                    yerr = np.array([llm_accs[ci_v] - llm_ci_los[ci_v],
+                                     llm_ci_his[ci_v] - llm_accs[ci_v]])
+                    ax.errorbar(x[ci_v], llm_accs[ci_v], yerr=yerr,
+                                fmt="none", ecolor=llm_cfg["color"], alpha=0.4,
+                                capsize=3, capthick=1)
+
+        ax.set_xlabel("Attempt Number", fontsize=16)
+        ax.set_ylabel("Balanced Accuracy", fontsize=16)
+        ax.set_title(COURSE_TITLES.get(course, course), fontsize=18)
+        ax.set_xticks(x)
+        ax.tick_params(labelsize=14)
+        ax.set_xlim(0.5, max_attempts + 0.5)
+        ax.autoscale(axis="y")
+        y_lo, y_hi = ax.get_ylim()
+        pad = 0.02 * (y_hi - y_lo)
+        ax.set_ylim(y_lo - pad, y_hi + pad)
+        ax.grid(True, alpha=0.3)
+
+    # One shared horizontal legend below the panels
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=len(labels),
+               fontsize=13, frameon=False, bbox_to_anchor=(0.5, -0.02),
+               columnspacing=1.2, handletextpad=0.5)
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    out_dir = os.path.join(REPO_ROOT, "overleaf", "figures")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "accuracy_vs_attempt_combined.png")
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Combined plot saved: {out_path}")
 
 
 if __name__ == "__main__":
