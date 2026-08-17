@@ -4,17 +4,23 @@ Produces the error_type_flow.png Sankey diagram showing how test-case
 outcomes transition from real students to LLM predictor.
 
 Usage:
-    python data_analysis/llm_bug_comparison.py
+    python data_analysis/llm_bug_comparison.py [--jsonl PATH] [--output_dir DIR]
+
+Grading results are cached per input as
+{output_dir}/graded_pairs_{jsonl basename}.csv; delete the cache to regrade.
 """
 
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import warnings
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -22,6 +28,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from huggingface_hub import snapshot_download
+
+from data_analysis.llm_eval_common import _pass_fraction
 
 warnings.filterwarnings("ignore")
 plt.rcParams.update({
@@ -51,13 +59,6 @@ PALETTE = {
     "compile":      "#C44E52",
 }
 ERROR_ORDER = ["correct", "wrong_output", "runtime", "compile"]
-
-
-def _pass_fraction(s):
-    s = str(s).strip()
-    if not s or s == "nan":
-        return np.nan
-    return sum(c == "1" for c in s) / len(s) if len(s) > 0 else np.nan
 
 
 def _parse_test_cases(unittests_str):
@@ -357,9 +358,22 @@ def fig_error_flow(df):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--jsonl", default=None)
+    parser.add_argument("--output_dir", default=None)
+    args = parser.parse_args()
+
+    global JSONL_PATH, OUT_DIR
+    if args.jsonl:
+        JSONL_PATH = args.jsonl
+    if args.output_dir:
+        OUT_DIR = args.output_dir
+
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    cache_path = os.path.join(OUT_DIR, "graded_pairs.csv")
+    jsonl_stem = os.path.splitext(os.path.basename(JSONL_PATH))[0]
+    cache_path = os.path.join(OUT_DIR, f"graded_pairs_{jsonl_stem}.csv")
     if os.path.exists(cache_path):
         print("Loading cached grading results...")
         df = pd.read_csv(cache_path)
