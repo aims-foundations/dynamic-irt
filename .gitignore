@@ -8,6 +8,7 @@ test.py
 wandb/
 .DS_Store
 myenv/
+extra/
 
 # Data files
 *.csv
@@ -39,3 +40,5 @@ results/
 *.blg
 *.fls
 *.fdb_latexmk
+archive/
+PAPER_REVISIONS.md
