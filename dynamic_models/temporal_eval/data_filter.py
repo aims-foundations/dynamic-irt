@@ -22,8 +22,6 @@ class DataFilterConfig:
     min_pass_rate: float = 0.10
     max_pass_rate: float = 0.90
     min_question_coverage: float = 0.25
-    min_student_item_coverage: float = 0.50
-    min_student_progress: float = 0.10
     max_attempts: int = 10
 
 
@@ -77,25 +75,11 @@ def _compute_filter_indices(correctness_matrix, question_infos, config):
     if len(col_indices) == 0:
         return np.array([], dtype=int), col_indices, selected_qs
 
-    # Filter students: item coverage
+    # Keep students with at least one observation on the selected questions;
+    # empty rows carry no signal and break the adapters.
     sub_matrix = matrix[:, col_indices]
     valid_counts = np.sum(sub_matrix != -1, axis=1)
-    active_students = np.where(valid_counts > len(col_indices) * config.min_student_item_coverage)[0]
-
-    # Filter students: progress between attempt 1 and attempt N
-    if config.min_student_progress > 0:
-        snapshots = _get_attempt_snapshots(corr, max_attempt=config.max_attempts)
-        snap_first = snapshots[0][:, col_indices]
-        snap_last = snapshots[-1][:, col_indices]
-        progressing = []
-        for s in active_students:
-            v1 = snap_first[s][snap_first[s] != -1]
-            vn = snap_last[s][snap_last[s] != -1]
-            s1 = v1.mean() if len(v1) > 0 else 0.0
-            sn = vn.mean() if len(vn) > 0 else 0.0
-            if abs(sn - s1) >= config.min_student_progress:
-                progressing.append(s)
-        active_students = np.array(progressing) if progressing else np.array([], dtype=int)
+    active_students = np.where(valid_counts > 0)[0]
 
     return active_students, col_indices, selected_qs
 
@@ -178,24 +162,3 @@ def _collapse_last_attempt(corr, max_attempt=None):
             valid = corr[:, :, a] != -1
             result[valid] = corr[:, :, a][valid]
     return result.numpy().astype(float)
-
-
-def _get_attempt_snapshots(corr, max_attempt=10):
-    n_s, n_i, n_a = corr.shape
-    arr = corr.numpy()
-    valid_mask = arr != -1
-    cum_valid = np.cumsum(valid_mask, axis=2)
-
-    prev = np.full((n_s, n_i), -1.0)
-    snapshots = []
-    for a in range(max_attempt):
-        result = prev.copy()
-        target = a + 1
-        hits = cum_valid == target
-        has_hit = hits.any(axis=2)
-        first_idx = np.argmax(hits, axis=2)
-        s_idx, i_idx = np.where(has_hit)
-        result[s_idx, i_idx] = arr[s_idx, i_idx, first_idx[s_idx, i_idx]]
-        snapshots.append(result)
-        prev = result
-    return snapshots

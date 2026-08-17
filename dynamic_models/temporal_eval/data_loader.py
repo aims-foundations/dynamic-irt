@@ -23,10 +23,10 @@ from huggingface_hub import snapshot_download
 class UnifiedData:
     """All data loaded once, served in multiple formats."""
 
-    # Raw CSV (for Elo, Dynamic IRT)
+    # Raw CSV
     main_data: pd.DataFrame
 
-    # 3D Tensors (for GPIRT, CIRT)
+    # 3D Tensors
     correctness_matrix: torch.Tensor  # [n_students, n_items, n_max_attempts]
     time_matrix: torch.Tensor  # [n_students, n_items, n_max_attempts]
 
@@ -61,10 +61,16 @@ def load_unified_data(course_name: str = "all") -> UnifiedData:
         UnifiedData with both CSV and tensor representations.
     """
     # Load raw CSV
-    csv_path = snapshot_download(
-        repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset",
-        local_files_only=True,
-    )
+    csv_path = os.environ.get("CODEINSIGHT_CSV_PATH")
+    if csv_path and not os.path.exists(csv_path):
+        raise FileNotFoundError(
+            f"CODEINSIGHT_CSV_PATH is set to '{csv_path}' but that path "
+            f"does not exist."
+        )
+    if not csv_path:
+        csv_path = snapshot_download(
+            repo_id="CodeInsightTeam/code_insights_csv", repo_type="dataset",
+        )
     main_data = pd.read_csv(
         f"{csv_path}/main_data.csv", low_memory=False, on_bad_lines="skip"
     )
@@ -87,6 +93,23 @@ def load_unified_data(course_name: str = "all") -> UnifiedData:
         os.path.dirname(__file__), "..", "..", ".cache", "matrices", course_name
     )
     cache_dir = os.path.abspath(cache_dir)
+
+    # Also check for matrices from HF repo (fagunpatel98/code_insights_matrices)
+    if not os.path.exists(os.path.join(cache_dir, "correctness_matrix.pt")):
+        try:
+            hf_token = os.environ.get("HF_TOKEN")
+            hf_matrices_path = snapshot_download(
+                repo_id="fagunpatel98/code_insights_matrices",
+                repo_type="dataset",
+                allow_patterns=[f"{course_name}/*"],
+                token=hf_token,
+            )
+            hf_course_dir = os.path.join(hf_matrices_path, course_name)
+            if os.path.exists(os.path.join(hf_course_dir, "correctness_matrix.pt")):
+                cache_dir = hf_course_dir
+                print(f"Using matrices from fagunpatel98/code_insights_matrices/{course_name}")
+        except Exception as e:
+            print(f"Could not fetch matrices from HF: {e}")
 
     if os.path.exists(os.path.join(cache_dir, "correctness_matrix.pt")):
         print(f"Loading cached matrices from {cache_dir}")
@@ -128,24 +151,28 @@ def load_unified_data(course_name: str = "all") -> UnifiedData:
         question_infos["week"].fillna(0).astype(int).values, dtype=torch.long
     )
 
-    # Build question_unittest_id -> week mapping from raw CSV
-    # question_infos_csv has question_id (int) matching question_unittest_id
-    if course_name == "all":
-        qid_week_df = question_infos_csv[["question_id", "week"]].dropna()
+    # Build question_unittest_id -> week mapping
+    # Prefer corrected per-item data (has question_unittest_id + week)
+    if "question_unittest_id" in question_infos.columns:
+        qid_week_df = question_infos[["question_unittest_id", "week"]].dropna().drop_duplicates("question_unittest_id")
+        qid_to_week = dict(
+            zip(qid_week_df["question_unittest_id"].astype(int), qid_week_df["week"].astype(int))
+        )
     else:
-        # Filter to this course's questions
-        course_row = course_infos[course_infos["course_name"] == course_name]
-        if len(course_row) > 0:
-            cid = course_row["course_id"].values[0]
-            qid_week_df = question_infos_csv[
-                question_infos_csv["course_id"] == cid
-            ][["question_id", "week"]].dropna()
-        else:
+        if course_name == "all":
             qid_week_df = question_infos_csv[["question_id", "week"]].dropna()
-
-    qid_to_week = dict(
-        zip(qid_week_df["question_id"].astype(int), qid_week_df["week"].astype(int))
-    )
+        else:
+            course_row = course_infos[course_infos["course_name"] == course_name]
+            if len(course_row) > 0:
+                cid = course_row["course_id"].values[0]
+                qid_week_df = question_infos_csv[
+                    question_infos_csv["course_id"] == cid
+                ][["question_id", "week"]].dropna()
+            else:
+                qid_week_df = question_infos_csv[["question_id", "week"]].dropna()
+        qid_to_week = dict(
+            zip(qid_week_df["question_id"].astype(int), qid_week_df["week"].astype(int))
+        )
 
     n_students, n_items, n_max_attempts = correctness.shape
     print(f"Loaded {course_name}: {n_students} students, {n_items} items, "
@@ -172,8 +199,12 @@ def load_student_split_data(
     course_name: str = "dsa_hk231",
     max_attempts: int = 10,
     test_frac: float = 0.3,
+    val_frac: float = 0.15,
     train_week_cutoff: int = 3,
     seed: int = 42,
+    min_pass_rate: float = 0.10,
+    max_pass_rate: float = 0.90,
+    min_question_coverage: float = 0.25,
 ) -> Tuple["UnifiedData", "StudentSplit"]:
     """Load data, apply quality filter, cap attempts, split students.
 
@@ -185,7 +216,10 @@ def load_student_split_data(
     data = load_unified_data(course_name)
 
     max_week = int(data.question_infos["week"].max())
-    config = DataFilterConfig(max_week=max_week, max_attempts=max_attempts)
+    config = DataFilterConfig(max_week=max_week, max_attempts=max_attempts,
+                              min_pass_rate=min_pass_rate,
+                              max_pass_rate=max_pass_rate,
+                              min_question_coverage=min_question_coverage)
     data = filter_data(data, config)
 
     split = generate_student_split(
@@ -193,6 +227,7 @@ def load_student_split_data(
         item_week=data.item_week,
         train_week_cutoff=train_week_cutoff,
         test_frac=test_frac,
+        val_frac=val_frac,
         seed=seed,
     )
 
