@@ -1,7 +1,8 @@
 """LLM student simulation using the student split evaluation framework.
 
-Uses the same (data, split) as psychometric models (IRT, CIRT, BKT, DKT)
-to ensure identical filtered students, items, and split indices.
+Uses the same (data, split) loader as the psychometric models (IRT, CIRT,
+BKT, DKT). With val_frac=0.0 the test split is identical to theirs, but the
+train pool additionally includes their validation students.
 
 Usage:
     python -m llm_simulator.eval_student_split --course dsa_hk231 --models haiku
@@ -21,7 +22,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from dynamic_models.temporal_eval.data_loader import load_student_split_data
 
-from .data_loader import infer_public_test_counts
 from .prompts import build_prompt
 from .rag import RAGRetriever
 from .run import MODEL_CONFIGS, run_evaluation, save_results
@@ -51,7 +51,6 @@ def main():
     parser.add_argument("--max_attempts", type=int, default=10)
     parser.add_argument("--max_students", type=int, default=None)
     parser.add_argument("--max_questions", type=int, default=None)
-    parser.add_argument("--n_examples", type=int, default=5)
     parser.add_argument("--n_self", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", default="results/llm_student_eval")
@@ -62,15 +61,25 @@ def main():
                         help="Save all prompts and responses to this file")
     parser.add_argument("--no_persona", action="store_true")
     parser.add_argument("--no_summarize", action="store_true")
+    parser.add_argument("--no_metadata", action="store_true")
+    parser.add_argument("--no_rag", action="store_true")
+    parser.add_argument("--no_trajectory", action="store_true")
+    parser.add_argument("--recent_questions", action="store_true",
+                        help="Replace TF-IDF+recency RAG with most recent questions")
+    parser.add_argument("--base_url", type=str, default=None,
+                        help="Override base_url for OpenAI-compatible server backends")
     args = parser.parse_args()
 
+    if args.recent_questions and args.no_rag:
+        parser.error("--recent_questions has no effect with --no_rag")
+
     # 1. Load data (same as psychometric models)
-    data, split = load_student_split_data(args.course, seed=args.seed)
+    # val_frac=0: the simulator has no validation phase, and the default 0.15
+    # would silently shrink the RAG/persona corpus and train_pass_rate stats.
+    data, split = load_student_split_data(args.course, seed=args.seed, val_frac=0.0)
 
     # 2. Convert to EvalItems (all questions, all students)
-    items, difficulties = load_student_split_eval_items(
-        data, split, n_examples=args.n_examples, seed=args.seed,
-    )
+    items, difficulties = load_student_split_eval_items(data, split, seed=args.seed)
 
     # 3. Filter students first, then cap questions per student
     if args.max_students:
@@ -108,13 +117,15 @@ def main():
     train_sids = set(str(data.student_ids[i]) for i in split.train_student_indices)
     test_sids = set(str(data.student_ids[i]) for i in split.test_student_indices)
 
-    rag = RAGRetriever.from_student_split(
-        full_main_df, question_infos,
-        train_student_ids=train_sids,
-        test_student_ids=test_sids,
-        train_week_cutoff=split.train_week_cutoff,
-        qid_to_week=data.qid_to_week,
-    )
+    rag = None
+    if not args.no_rag:
+        rag = RAGRetriever.from_student_split(
+            full_main_df, question_infos,
+            train_student_ids=train_sids,
+            test_student_ids=test_sids,
+            train_week_cutoff=split.train_week_cutoff,
+            qid_to_week=data.qid_to_week,
+        )
 
     # 5. Build persona builder
     persona_builder = None
@@ -152,15 +163,25 @@ def main():
 
     # Collect RAG self-trajectories (fast, no LLM calls)
     item_selfs = {}
-    for i, item in enumerate(items):
-        target_week = rag._q_id_to_week.get(str(item.question_id))
-        item_selfs[i] = rag.retrieve_self_trajectories(
-            item.student_id, item.question_id,
-            max_self=args.n_self, target_week=target_week,
-        )
-        diff = difficulties.get(item.question_name)
-        if diff:
-            item_metadata[i] = _format_question_metadata(diff)
+    if not args.no_rag:
+        for i, item in enumerate(items):
+            target_week = data.qid_to_week.get(int(item.question_id))
+            if args.recent_questions:
+                item_selfs[i] = rag.retrieve_recent_trajectories(
+                    item.student_id, item.question_id,
+                    max_self=args.n_self, target_week=target_week,
+                )
+            else:
+                item_selfs[i] = rag.retrieve_self_trajectories(
+                    item.student_id, item.question_id,
+                    max_self=args.n_self, target_week=target_week,
+                )
+
+    if not args.no_metadata:
+        for i, item in enumerate(items):
+            diff = difficulties.get(item.question_name)
+            if diff:
+                item_metadata[i] = _format_question_metadata(diff)
 
     if summarizer:
         from .summarize import SELF_SUMMARY_PROMPT, QUESTION_SUMMARY_PROMPT
@@ -230,7 +251,7 @@ def main():
 
     # 8. Inject summaries into items
     for i, item in enumerate(items):
-        item._self_summaries = item_self_summaries.get(i)
+        item._self_summaries = item_self_summaries.get(i, [])
         item._question_metadata = item_metadata.get(i)
 
     # 9. Dry run: show sample prompts
@@ -268,7 +289,6 @@ def main():
         return
 
     # 10. Run models
-    n_public_map = infer_public_test_counts(full_main_df)
     student_info = full_main_df[["student_id", "course_id", "section_id"]].drop_duplicates(subset=["student_id"])
     student_to_course = dict(zip(student_info["student_id"].astype(str), student_info["course_id"].astype(str)))
     student_to_section = dict(zip(student_info["student_id"].astype(str), student_info["section_id"].astype(str)))
@@ -277,13 +297,24 @@ def main():
 
     output_dir = os.path.join(args.output_dir, args.course)
 
+    # Route ablation runs to subdirectories (all active flags joined)
+    flags = [name for name, on in [
+        ("no_persona", args.no_persona),
+        ("no_rag", args.no_rag),
+        ("no_metadata", args.no_metadata),
+        ("no_trajectory", args.no_trajectory),
+        ("no_summarize", args.no_summarize),
+        ("recent_questions", args.recent_questions),
+    ] if on]
+    if flags:
+        output_dir = os.path.join(output_dir, "ablation_" + "_".join(flags))
+
     for model_key in args.models:
         logger.info("=== Running %s ===", model_key)
         try:
             results = run_evaluation(
                 items, model_key,
                 max_attempts=args.max_attempts,
-                n_public_map=n_public_map,
                 student_to_course=student_to_course,
                 student_to_section=student_to_section,
                 question_to_is_exam=question_to_is_exam,
@@ -293,6 +324,8 @@ def main():
                 persona_builder=persona_builder,
                 history_summarizer=summarizer,
                 prompt_log_file=args.log_prompts,
+                no_trajectory=args.no_trajectory,
+                base_url=args.base_url,
             )
         except Exception as e:
             logger.error("Model %s failed: %s", model_key, e, exc_info=True)

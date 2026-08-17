@@ -1,7 +1,8 @@
 """LLM student simulation: iterative code generation and grading.
 
-Core module providing run_evaluation() which runs the attempt loop:
-build prompt → call LLM → grade code → feedback → repeat.
+Core module providing run_evaluation() which runs the trajectory-grounded
+attempt loop: at each step the model sees the student's real prior attempts
+and predicts the next submission, which is then compiled and graded.
 
 Entry point is eval_student_split.py, not this file directly.
 """
@@ -27,8 +28,8 @@ logger = logging.getLogger(__name__)
 # ── Grading ─────────────────────────────────────────────────────────────────
 
 
-def _grade_single(template: str, testcases: list, code: str) -> dict:
-    """Grade a code submission against test cases. Returns {score, testcases, outputs}."""
+def _grade_single(template: str, testcases: list, code: str) -> list:
+    """Grade a code submission against test cases. Returns per-test 0/1 results."""
     formatted = []
     std_inputs = []
     for tc in testcases:
@@ -46,7 +47,6 @@ def _grade_single(template: str, testcases: list, code: str) -> dict:
     temp_dir = tempfile.mkdtemp()
     try:
         results_list = []
-        outputs = []
         for i, src in enumerate(codes):
             cpp_file = os.path.join(temp_dir, f"tc_{i}.cpp")
             exe_file = os.path.join(temp_dir, f"tc_{i}.out")
@@ -59,7 +59,6 @@ def _grade_single(template: str, testcases: list, code: str) -> dict:
             )
             if comp.returncode != 0:
                 results_list.append(0)
-                outputs.append("")
                 continue
 
             try:
@@ -69,22 +68,18 @@ def _grade_single(template: str, testcases: list, code: str) -> dict:
                 )
                 if run.returncode != 0:
                     results_list.append(0)
-                    outputs.append("")
                     continue
-                outputs.append(run.stdout)
                 results_list.append(1 if testcases[i]["output"].strip() == run.stdout.strip() else 0)
             except Exception:
                 results_list.append(0)
-                outputs.append("")
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-    score = sum(results_list) / len(results_list) if results_list else 0
-    return {"score": score, "testcases": results_list, "outputs": outputs}
+    return results_list
 
 
-def _grade_batch(jobs, chunk_items, test_data, codes, test_key):
-    """Grade a batch of jobs in parallel. Returns {i: eval_result}."""
+def _grade_batch(jobs, chunk_items, test_data, codes):
+    """Grade a batch of jobs in parallel. Returns {i: per-test 0/1 results}."""
     if not jobs:
         return {}
     results = {}
@@ -95,7 +90,7 @@ def _grade_batch(jobs, chunk_items, test_data, codes, test_key):
             td = test_data[idx]
             futures[pool.submit(
                 _grade_single, chunk_items[idx].question_template,
-                td[test_key], codes[i],
+                td["test_cases"], codes[i],
             )] = i
         for future in as_completed(futures):
             i = futures[future]
@@ -151,47 +146,6 @@ class EvalResult:
         ]
 
 
-# ── Feedback construction ───────────────────────────────────────────────────
-
-
-def _build_feedback_message(code, eval_result, tests_used, history_summarizer=None):
-    """Build a compact feedback message from grading results."""
-    if not code:
-        return "Your response did not contain a valid ```cpp code block. Please try again.\n"
-
-    pass_pattern = "".join(str(r) for r in eval_result["testcases"])
-    n_passed = sum(eval_result["testcases"])
-    n_total = len(eval_result["testcases"])
-    parts = [f"Result: {pass_pattern} ({n_passed}/{n_total} tests passed)\n"]
-
-    failed = []
-    for j, r in enumerate(eval_result["testcases"]):
-        if r == 0:
-            tc = tests_used[j]
-            actual = eval_result["outputs"][j].strip()[:500] if eval_result["outputs"][j] else None
-            failed.append({
-                "input": tc["input"][:500],
-                "std_in": tc["std_in"][:500],
-                "expected": tc["output"][:500],
-                "actual": actual,
-            })
-
-    if not failed:
-        pass
-    elif history_summarizer:
-        parts.append(history_summarizer.summarize_feedback(code, failed[:5]) + "\n")
-    else:
-        parts.append("Failed test details:\n")
-        for j, ft in enumerate(failed[:5], 1):
-            actual = ft["actual"] or "(no output)"
-            parts.append(
-                f"Test {j}: input={(ft['input'] or '')[:200]}, "
-                f"expected={(ft['expected'] or '')[:200]}, got={actual[:200]}\n"
-            )
-
-    return "\n".join(parts)
-
-
 # ── Initial prompt construction ─────────────────────────────────────────────
 
 
@@ -219,7 +173,6 @@ def run_evaluation(
     items: List[EvalItem],
     model_key: str,
     max_attempts: int,
-    n_public_map: Dict[str, int],
     student_to_course: Optional[Dict[str, str]] = None,
     student_to_section: Optional[Dict[str, str]] = None,
     question_to_is_exam: Optional[Dict[str, str]] = None,
@@ -229,8 +182,8 @@ def run_evaluation(
     persona_builder=None,
     history_summarizer=None,
     prompt_log_file=None,
-    tensor_parallel_size: int = 1,
-    port: Optional[int] = None,
+    base_url: Optional[str] = None,
+    no_trajectory: bool = False,
 ) -> List[EvalResult]:
     """Run iterative LLM evaluation on a list of items.
 
@@ -243,7 +196,7 @@ def run_evaluation(
     student_to_section = student_to_section or {}
     question_to_is_exam = question_to_is_exam or {}
 
-    runner = create_runner(model_key, tensor_parallel_size=tensor_parallel_size, port=port)
+    runner = create_runner(model_key, base_url=base_url)
     all_results: List[EvalResult] = []
 
     # Resume: skip already-completed (student, question) pairs
@@ -269,9 +222,10 @@ def run_evaluation(
 
         chunk_results = _run_chunk(
             chunk, runner, model_key, label, max_attempts,
-            n_public_map, batch_size,
+            batch_size,
             student_to_course, student_to_section, question_to_is_exam,
             persona_builder, history_summarizer, prompt_log_file,
+            no_trajectory=no_trajectory,
         )
         all_results.extend(chunk_results)
 
@@ -289,9 +243,10 @@ def run_evaluation(
 
 def _run_chunk(
     chunk_items, runner, model_key, label, max_attempts,
-    n_public_map, batch_size,
+    batch_size,
     student_to_course, student_to_section, question_to_is_exam,
     persona_builder, history_summarizer, prompt_log_file,
+    no_trajectory=False,
 ):
     """Run the iterative attempt loop on a chunk of items."""
     # Parse test cases
@@ -301,9 +256,7 @@ def _run_chunk(
         if not tcs or not isinstance(item.question_template, str):
             test_data[idx] = None
             continue
-        n_pub = n_public_map.get(item.question_id, len(tcs))
-        n_pub = max(1, min(n_pub, len(tcs)))
-        test_data[idx] = {"test_cases": tcs, "public_tests": tcs[:n_pub]}
+        test_data[idx] = {"test_cases": tcs}
 
     # Init state
     results = [
@@ -316,11 +269,9 @@ def _run_chunk(
         )
         for item in chunk_items
     ]
-    last_code = [None] * len(chunk_items)
-    last_eval = {}
-    last_tests = {}
     active = list(range(len(chunk_items)))
     conversations = {}  # idx -> {"system": str, "messages": [...]}
+    error_indices = set()  # items dropped due to API errors (retried on resume)
 
     from .summarize import RAG_SUMMARY_PROMPT
     item_max_attempts = {}
@@ -363,39 +314,42 @@ def _run_chunk(
                     conv_histories.append(None)
             else:
                 conv = conversations.get(idx)
-                ev = last_eval.get(idx)
-                td = test_data[idx]
 
-                # Show full student trajectory so far (attempts 0..t-1)
-                real = getattr(item, "_real_attempts", [])
-                parts = ["=== Student's Attempt Trajectory ===\n"]
+                if no_trajectory:
+                    # Only the real student's attempts are removed; the model
+                    # still sees its own prior turns via the conversation.
+                    feedback_msg = f"This is attempt {attempt + 1}. Predict what the student would submit."
+                else:
+                    # Show full student trajectory so far (attempts 0..t-1)
+                    real = getattr(item, "_real_attempts", [])
+                    parts = ["=== Student's Attempt Trajectory ===\n"]
 
-                for prev_t in range(attempt):
-                    prev_real = real[prev_t] if prev_t < len(real) else None
-                    if not prev_real:
-                        continue
-                    rtype = "Precheck" if prev_real["response_type"] == "Prechecked" else "Submit"
-                    if history_summarizer:
-                        summary = history_summarizer._call_llm(
-                            f"{RAG_SUMMARY_PROMPT}\n\n"
-                            f"Problem: {item.question_name}\n"
-                            f"Test result: {prev_real['pass']}\n\n"
-                            f"```cpp\n{prev_real['response'][:3000]}\n```"
-                        )
-                        parts.append(
-                            f"Attempt {prev_t + 1} [{rtype}] -> {prev_real['pass']}\n"
-                            f"Summary: {summary}\n"
-                        )
-                    else:
-                        parts.append(
-                            f"Attempt {prev_t + 1} [{rtype}] -> {prev_real['pass']}\n"
-                        )
+                    for prev_t in range(attempt):
+                        prev_real = real[prev_t] if prev_t < len(real) else None
+                        if not prev_real:
+                            continue
+                        rtype = "Precheck" if prev_real["response_type"] == "Prechecked" else "Submit"
+                        if history_summarizer:
+                            summary = history_summarizer._call_llm(
+                                f"{RAG_SUMMARY_PROMPT}\n\n"
+                                f"Problem: {item.question_name}\n"
+                                f"Test result: {prev_real['pass']}\n\n"
+                                f"```cpp\n{prev_real['response'][:3000]}\n```"
+                            )
+                            parts.append(
+                                f"Attempt {prev_t + 1} [{rtype}] -> {prev_real['pass']}\n"
+                                f"Summary: {summary}\n"
+                            )
+                        else:
+                            parts.append(
+                                f"Attempt {prev_t + 1} [{rtype}] -> {prev_real['pass']}\n"
+                            )
 
-                parts.append(
-                    "Now predict what the student would submit next. "
-                    "Match their coding style and debugging approach."
-                )
-                feedback_msg = "\n".join(parts)
+                    parts.append(
+                        "Now predict what the student would submit next. "
+                        "Match their coding style and debugging approach."
+                    )
+                    feedback_msg = "\n".join(parts)
 
                 if conv:
                     conv["messages"].append({"role": "user", "content": feedback_msg})
@@ -427,6 +381,12 @@ def _run_chunk(
             conv = conversations.get(active[i])
             if conv:
                 conv["messages"].append({"role": "assistant", "content": resp})
+                # Cap context growth: keep the first user message (full question
+                # prompt) plus the last 8 messages. Trimming in whole user/
+                # assistant pairs keeps the alternation valid.
+                msgs = conv["messages"]
+                if len(msgs) > 9:
+                    conv["messages"] = [msgs[0]] + msgs[-8:]
 
         # ── Log ──
         if prompt_log_file:
@@ -454,73 +414,60 @@ def _run_chunk(
             code = extract_code(all_responses[i])
             actions.append(action)
             codes.append(code)
-            last_code[idx] = code
 
-        precheck_jobs = {i: idx for i, idx in enumerate(active)
-                         if test_data[idx] and codes[i] and actions[i] != "Submit"}
-        submit_jobs = {i: idx for i, idx in enumerate(active)
-                       if test_data[idx] and codes[i] and actions[i] == "Submit"}
+        grade_jobs = {i: idx for i, idx in enumerate(active)
+                      if test_data[idx] and codes[i]}
 
-        if precheck_jobs:
-            logger.info("%s | Grading %d prechecks", label, len(precheck_jobs))
-        if submit_jobs:
-            logger.info("%s | Grading %d submits", label, len(submit_jobs))
+        if grade_jobs:
+            logger.info("%s | Grading %d items", label, len(grade_jobs))
 
-        precheck_results = _grade_batch(precheck_jobs, chunk_items, test_data, codes, "public_tests")
-        submit_results = _grade_batch(submit_jobs, chunk_items, test_data, codes, "test_cases")
+        grade_results = _grade_batch(grade_jobs, chunk_items, test_data, codes)
 
         # ── Process results ──
         next_active = []
-        n_prechecks = n_submits = n_passed = 0
+        n_graded = n_passed = 0
 
         for i, idx in enumerate(active):
             raw = all_responses[i]
             td = test_data[idx]
 
-            if actions[i] == "Submit":
-                n_submits += 1
-                if i in submit_results:
-                    ev = submit_results[i]
-                    pp = "".join(str(x) for x in ev["testcases"])
-                    passed = bool(pp) and all(c == "1" for c in pp)
-                else:
-                    n_t = len(td["test_cases"]) if td else 0
-                    pp = "0" * n_t
-                    ev = {"testcases": [0] * n_t, "outputs": [""] * n_t}
-                    passed = False
+            # Runner failure sentinel: don't record a fake all-tests-failed
+            # attempt. Drop the item entirely so a resume retries it.
+            if isinstance(raw, str) and raw.startswith("ERROR:"):
+                error_indices.add(idx)
+                continue
 
-                results[idx].attempts.append(AttemptRecord(
-                    attempt, timestamp, "Submit", user_prompts[i], raw, codes[i], pp))
-
-                last_eval[idx] = ev
-                last_tests[idx] = td["test_cases"] if td else []
-                next_active.append(idx)
-                if passed:
-                    n_passed += 1
+            if i in grade_results:
+                n_graded += 1
+                pp = "".join(str(x) for x in grade_results[i])
+                passed = bool(pp) and all(c == "1" for c in pp)
             else:
-                n_prechecks += 1
-                if i in precheck_results:
-                    ev = precheck_results[i]
-                    pp = "".join(str(x) for x in ev["testcases"])
-                else:
-                    n_p = len(td["public_tests"]) if td else 0
-                    pp = "0" * n_p
-                    ev = {"testcases": [0] * n_p, "outputs": [""] * n_p}
+                n_t = len(td["test_cases"]) if td else 0
+                pp = "0" * n_t
+                passed = False
 
-                results[idx].attempts.append(AttemptRecord(
-                    attempt, timestamp, "Prechecked", user_prompts[i], raw, codes[i], pp))
+            # "Prechecked" (not "Precheck") matches the response_type values in
+            # the real submission data, keeping the output schema compatible.
+            rtype = actions[i] if actions[i] == "Submit" else "Prechecked"
+            results[idx].attempts.append(AttemptRecord(
+                attempt, timestamp, rtype, user_prompts[i], raw, codes[i], pp))
 
-                last_eval[idx] = ev
-                last_tests[idx] = td["public_tests"] if td else []
-                next_active.append(idx)
+            next_active.append(idx)
+            if passed:
+                n_passed += 1
 
-        logger.info("%s | Attempt %d: %d precheck, %d submit (%d passed), %d continue",
-                    label, attempt + 1, n_prechecks, n_submits, n_passed, len(next_active))
+        logger.info("%s | Attempt %d: %d graded, %d passed all, %d continue",
+                    label, attempt + 1, n_graded, n_passed, len(next_active))
         active = next_active
 
+    if error_indices:
+        logger.warning("%s | %d items hit API errors; left unrecorded so a "
+                       "resume retries them", label, len(error_indices))
+        results = [r for idx, r in enumerate(results) if idx not in error_indices]
+
     n_all_pass = sum(1 for r in results
-                     if any(a.response_type == "Submit" and a.pass_pattern
-                            and all(c == "1" for c in a.pass_pattern) for a in r.attempts))
+                     if any(a.pass_pattern and all(c == "1" for c in a.pass_pattern)
+                            for a in r.attempts))
     logger.info("%s | Done! %d/%d passed all tests (%.0f%%)",
                 label, n_all_pass, len(chunk_items),
                 100.0 * n_all_pass / len(chunk_items) if chunk_items else 0)

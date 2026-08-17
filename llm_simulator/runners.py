@@ -6,6 +6,11 @@ open-source models served via vLLM (LLaMA, Gemma, Qwen, GLM).
 Each runner exposes two methods:
     call(prompt)     -> str          # single prompt (for iterative loop)
     generate(prompts) -> List[str]   # batch (for single-shot evaluation)
+
+Both accept optional multi-turn conversations (lists of role/content
+messages); when a conversation is given it is sent as the message list
+instead of the single prompt. Exception: VLLMRunner supports conversations
+only in generate(); its call() is single-turn.
 """
 
 import logging
@@ -99,15 +104,30 @@ class GeminiRunner(LLMRunner):
         self.model = _genai.GenerativeModel(api_model)
         self._genai = _genai
 
-    def call(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        content = prompt
-        if system_prompt:
-            content = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{prompt}"
+    def call(
+        self, prompt: str, system_prompt: Optional[str] = None,
+        conversation: Optional[List[dict]] = None,
+    ) -> str:
+        if conversation:
+            contents = [
+                {"role": "model" if m["role"] == "assistant" else "user",
+                 "parts": [m["content"]]}
+                for m in conversation
+            ]
+            if system_prompt and contents:
+                contents[0]["parts"][0] = (
+                    f"[System Instructions]\n{system_prompt}\n\n"
+                    f"[User Message]\n{contents[0]['parts'][0]}"
+                )
+        else:
+            content = prompt
+            if system_prompt:
+                content = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{prompt}"
+            contents = [content]
         resp = self.model.generate_content(
-            contents=[content],
+            contents=contents,
             generation_config=self._genai.types.GenerationConfig(
                 max_output_tokens=4000,
-                stop_sequences=["\n```"],
             ),
         )
         return resp.text
@@ -116,7 +136,7 @@ class GeminiRunner(LLMRunner):
 class OpenAIRunner(LLMRunner):
     def __init__(self, api_model: str, base_url: str = None,
                  api_key: str = None, max_tokens: int = 4000,
-                 stop: list = None, **kwargs):
+                 stop: list = None, extra_body: dict = None, **kwargs):
         super().__init__(**kwargs)
         import openai as _openai
         self.client = _openai.OpenAI(
@@ -127,17 +147,25 @@ class OpenAIRunner(LLMRunner):
         self.api_model = api_model
         self.max_tokens = max_tokens
         self.stop = stop
+        self.extra_body = extra_body or {}
 
-    def call(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def call(
+        self, prompt: str, system_prompt: Optional[str] = None,
+        conversation: Optional[List[dict]] = None,
+    ) -> str:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        if conversation:
+            messages.extend(conversation)
+        else:
+            messages.append({"role": "user", "content": prompt})
         resp = self.client.chat.completions.create(
             model=self.api_model,
             messages=messages,
             max_tokens=self.max_tokens,
             stop=self.stop,
+            extra_body=self.extra_body if self.extra_body else None,
         )
         return resp.choices[0].message.content
 
@@ -149,19 +177,23 @@ class MistralRunner(LLMRunner):
         self.client = _Mistral(api_key=os.environ["MISTRAL_API_KEY"])
         self.api_model = api_model
 
-    def call(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def call(
+        self, prompt: str, system_prompt: Optional[str] = None,
+        conversation: Optional[List[dict]] = None,
+    ) -> str:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        if conversation:
+            messages.extend(conversation)
+        else:
+            messages.append({"role": "user", "content": prompt})
         resp = self.client.chat.complete(
             model=self.api_model,
             messages=messages,
             max_tokens=4000,
         )
-        text = resp.choices[0].message.content
-        idx = text.find("\n```")
-        return text[:idx] if idx != -1 else text
+        return resp.choices[0].message.content
 
 
 # ── Open-source model runner (vLLM) ──────────────────────────────────────────
@@ -222,16 +254,41 @@ class VLLMRunner(LLMRunner):
         self,
         prompts: List[str],
         system_prompts: Optional[List[Optional[str]]] = None,
+        conversations: Optional[List[Optional[List[dict]]]] = None,
     ) -> List[str]:
         self._ensure_initialized()
         if system_prompts is None:
             system_prompts = [None] * len(prompts)
-        conversations = [
-            self._make_messages(p, sp)
-            for p, sp in zip(prompts, system_prompts)
-        ]
-        outputs = self._model.chat(conversations, self._sampling_params)
-        return [o.outputs[0].text if o.outputs else "" for o in outputs]
+        if conversations is None:
+            conversations = [None] * len(prompts)
+
+        chat_inputs = []
+        for p, sp, conv in zip(prompts, system_prompts, conversations):
+            if conv:
+                msgs = []
+                if sp:
+                    msgs.append({"role": "system", "content": sp})
+                msgs.extend(conv)
+                chat_inputs.append(msgs)
+            else:
+                chat_inputs.append(self._make_messages(p, sp))
+
+        try:
+            outputs = self._model.chat(chat_inputs, self._sampling_params)
+            return [o.outputs[0].text if o.outputs else "" for o in outputs]
+        except Exception as batch_err:
+            # Batch failed; retry per conversation and convert failures to
+            # ERROR strings, matching LLMRunner.generate semantics.
+            logger.error("vLLM batch chat failed (%s); retrying per item", batch_err)
+            results = []
+            for i, msgs in enumerate(chat_inputs):
+                try:
+                    out = self._model.chat([msgs], self._sampling_params)
+                    results.append(out[0].outputs[0].text if out[0].outputs else "")
+                except Exception as e:
+                    logger.error("prompt %d failed: %s", i + 1, e)
+                    results.append(f"ERROR: {e}")
+            return results
 
     def cleanup(self):
         """Free GPU memory."""
@@ -247,6 +304,15 @@ class VLLMRunner(LLMRunner):
 
 # ── Model configuration and factory ──────────────────────────────────────────
 
+
+# Shared settings for OpenAI-compatible vLLM server configs (*_server keys)
+_SERVER_DEFAULTS = {
+    "backend": "openai",
+    "base_url": "http://localhost:8000/v1",
+    "api_key": "EMPTY",
+    "max_workers": 32,
+    "delay": 0.0,
+}
 
 MODEL_CONFIGS: Dict[str, dict] = {
     # Commercial API models
@@ -287,14 +353,16 @@ MODEL_CONFIGS: Dict[str, dict] = {
         "max_tokens": 2048,
         "temperature": 0.0,
     },
+    # Use "gemma" for in-process vLLM; use "gemma_server" against a running vLLM server.
     "gemma": {
-        "hf_id": "google/gemma-3-27b-it",
+        "hf_id": "google/gemma-4-31B-it",
         "backend": "vllm",
         "max_tokens": 2048,
         "temperature": 0.0,
     },
+    # Use "qwen" for in-process vLLM; use "qwen_server" against a running vLLM server.
     "qwen": {
-        "hf_id": "Qwen/Qwen2.5-14B-Instruct",
+        "hf_id": "Qwen/Qwen3-14B",
         "backend": "vllm",
         "max_tokens": 2048,
         "temperature": 0.0,
@@ -306,14 +374,37 @@ MODEL_CONFIGS: Dict[str, dict] = {
         "temperature": 0.0,
     },
     # vLLM serve mode — connect to a running vLLM server via OpenAI API
-    "glm_server": {
+    "glm_awq_server": {
+        **_SERVER_DEFAULTS,
         "api_model": "QuantTrio/GLM-4.7-AWQ",
-        "backend": "openai",
-        "base_url": "http://localhost:8000/v1",
-        "api_key": "EMPTY",
         "max_tokens": 2048,
-        "max_workers": 32,
-        "delay": 0.0,
+    },
+    "qwen_server": {
+        **_SERVER_DEFAULTS,
+        "api_model": "Qwen/Qwen3-14B",
+        "max_tokens": 3000,
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+    },
+    "qwen32_server": {
+        **_SERVER_DEFAULTS,
+        "api_model": "Qwen/Qwen3-32B",
+        "max_tokens": 3000,
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+    },
+    "gemma_server": {
+        **_SERVER_DEFAULTS,
+        "api_model": "google/gemma-4-31B-it",
+        "max_tokens": 2048,
+    },
+    "glm_flash_server": {
+        **_SERVER_DEFAULTS,
+        "api_model": "zai-org/GLM-4.7-Flash",
+        "max_tokens": 2048,
+    },
+    "kimi_server": {
+        **_SERVER_DEFAULTS,
+        "api_model": "nvidia/Kimi-K2.6-NVFP4",
+        "max_tokens": 2048,
     },
 }
 
@@ -326,12 +417,13 @@ _API_RUNNER_MAP = {
 
 
 def create_runner(model_key: str, tensor_parallel_size: int = 1,
-                  port: int = None) -> LLMRunner:
+                  port: int = None, base_url: str = None) -> LLMRunner:
     """Create a runner for the given model key.
 
     Args:
         port: Override the server port for OpenAI-compatible backends
-              (e.g., glm_server). Sets base_url to http://localhost:{port}/v1.
+              (e.g., glm_flash_server). Sets base_url to http://localhost:{port}/v1.
+        base_url: Override the base_url directly (e.g., Modal endpoint URL).
     """
     if model_key not in MODEL_CONFIGS:
         raise ValueError(
@@ -339,6 +431,9 @@ def create_runner(model_key: str, tensor_parallel_size: int = 1,
         )
     config = MODEL_CONFIGS[model_key]
     backend = config["backend"]
+
+    if (base_url is not None or port is not None) and backend != "openai":
+        raise ValueError("--base_url is only supported for openai-compatible backends")
 
     if backend == "vllm":
         return VLLMRunner(
@@ -354,7 +449,9 @@ def create_runner(model_key: str, tensor_parallel_size: int = 1,
         "max_workers": config.get("max_workers", 2),
         "delay": config.get("delay", 1.0),
     }
-    if port is not None:
+    if base_url is not None:
+        kwargs["base_url"] = base_url
+    elif port is not None:
         kwargs["base_url"] = f"http://localhost:{port}/v1"
     elif "base_url" in config:
         kwargs["base_url"] = config["base_url"]
@@ -364,4 +461,6 @@ def create_runner(model_key: str, tensor_parallel_size: int = 1,
         kwargs["max_tokens"] = config["max_tokens"]
     if "stop" in config:
         kwargs["stop"] = config["stop"]
+    if "extra_body" in config:
+        kwargs["extra_body"] = config["extra_body"]
     return cls(**kwargs)
